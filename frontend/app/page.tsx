@@ -18,9 +18,6 @@ import {
   ChevronDown,
   Gauge
 } from 'lucide-react';
-import { ReactFlow, Background, Controls } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-
 // Backend base URL. Set NEXT_PUBLIC_API_URL in the deployment environment
 // (e.g. the Render backend URL); falls back to localhost for local dev.
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -67,15 +64,96 @@ function computeAudit(result: any) {
   return { score, factors };
 }
 
+// Explainable-AI decision timeline: maps the structured run into transparent
+// phases (Evidence -> Conclusion), derived deterministically from the result.
+function buildDecisionTimeline(result: any, auditScore: number | null) {
+  const c = result?.client_data;
+  const t = result?.typhoon_result;
+  const s = result?.suitability;
+  const tax = result?.tax_result;
+  const dc = tax?.detailed_calculations || {};
+  const op = dc.optimization_purchases || {};
+  const funds = result?.recommendation?.recommended_funds || [];
+  const comp = result?.compliance;
+  const b = (n: any) => "฿" + new Intl.NumberFormat("en-US").format(Math.round(n || 0));
+
+  return [
+    {
+      title: "Investor Understanding",
+      evidence: [
+        c ? `Income ${b(c.monthly_income)}/mo${c.bonus_months ? ` + ${c.bonus_months}-month bonus` : ""}` : "Income information",
+        c ? `Existing benefits: RMF ${b(c.existing_rmf)}, SSF ${b(c.existing_ssf)}, insurance ${b(c.life_insurance)}` : "Existing tax benefits",
+        `Risk preference: ${c?.risk_profile ?? "—"}`,
+        t ? `NLP confidence: ${(t.confidence * 100).toFixed(0)}%` : null,
+      ].filter(Boolean) as string[],
+      conclusion: [
+        `${c?.risk_profile ?? "Moderate"}-risk investor`,
+        `Objective: ${c?.goal ?? "Tax optimization"}`,
+      ],
+    },
+    {
+      title: "Suitability Assessment",
+      evidence: [
+        `Risk profile: ${s?.risk_profile ?? c?.risk_profile ?? "—"}`,
+        `Investment horizon: ${s?.investment_horizon ?? "—"}`,
+      ],
+      conclusion: [
+        s?.recommended_allocation
+          ? `Suitable allocation: ${Object.entries(s.recommended_allocation).map(([k, v]) => `${v}% ${k}`).join(" / ")}`
+          : "Allocation determined",
+      ],
+    },
+    {
+      title: "Tax Optimization",
+      evidence: [
+        dc.assessable_income ? `Assessable income ${b(dc.assessable_income)}` : "Income level",
+        `Existing deductions ${b(dc.deductions_before)}`,
+      ],
+      conclusion: tax
+        ? [
+            `Tax ${b(tax.tax_before)} → ${b(tax.tax_after)} (save ${b(tax.saving)})`,
+            `Requires ${b(op.total_additional_investment)} additional tax-deductible investment`,
+          ]
+        : ["Additional tax-saving opportunity identified"],
+    },
+    {
+      title: "Fund Screening",
+      evidence: [
+        "Risk-matched fund universe (SSF / RMF / ThaiESG)",
+        "SEC compliance constraints",
+      ],
+      conclusion: [
+        `${funds.length} fund(s) matched requirements`,
+        ...funds.slice(0, 3).map((f: any) => `${f.fund_code} · ${f.fund_type} · risk ${f.risk_level}`),
+      ],
+    },
+    {
+      title: "Human Oversight",
+      evidence: [
+        "Portfolio recommendation",
+        auditScore != null ? `Audit confidence: ${auditScore}%` : "Audit confidence score",
+      ],
+      conclusion: [
+        comp
+          ? (comp.status === "approved"
+              ? "Compliance approved — cleared for final action"
+              : `Rejected — ${comp.violations?.length ?? 0} violation(s) flagged`)
+          : "Human review required before final action",
+      ],
+    },
+  ];
+}
+
 export default function Dashboard() {
   const [inputText, setInputText] = useState(PRESETS[0].text);
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [error, setError] = useState<string | null>(null);
   
-  // Results & Graph State
+  // Results State
   const [result, setResult] = useState<any>(null);
-  const [flowGraph, setFlowGraph] = useState<any>(null);
+  // Raw execution log toggle (under the decision timeline)
+  const [rawLogOpen, setRawLogOpen] = useState(false);
 
   // File upload state
   const [fileLoading, setFileLoading] = useState(false);
@@ -109,23 +187,10 @@ export default function Dashboard() {
     }
   };
 
-  const fetchFlowGraph = async (sid: string) => {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/session/${sid}`);
-      if (res.ok) {
-        const data = await res.json();
-        setFlowGraph(data.flow_graph);
-      }
-    } catch (err) {
-      console.error("Failed to fetch session flow graph", err);
-    }
-  };
-
   const handleRunWorkflow = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
-    setFlowGraph(null);
     setStatusText("Initializing LangGraph Orchestrator...");
     
     try {
@@ -144,9 +209,6 @@ export default function Dashboard() {
 
       const data = await response.json();
       setResult(data);
-      if (data.session_id) {
-        await fetchFlowGraph(data.session_id);
-      }
     } catch (err: any) {
       setError(err.message || "Failed to connect to backend server. Make sure FastAPI is running on port 8000.");
     } finally {
@@ -176,9 +238,6 @@ export default function Dashboard() {
 
       const data = await response.json();
       setResult(data);
-      if (data.session_id) {
-        await fetchFlowGraph(data.session_id);
-      }
     } catch (err: any) {
       setError(err.message || "Failed to approve recommendation.");
     } finally {
@@ -916,55 +975,71 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* 7. React Flow / LangGraph Workflow Map */}
-                {result.session_id && flowGraph && (
+                {/* Explainable-AI Decision Timeline */}
+                {audit && (
                   <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">LangGraph Active Path Visualizer</h3>
-                      <FileSpreadsheet className="h-4 w-4 text-slate-400" />
-                    </div>
-
-                    <div className="h-80 border border-white/5 rounded-lg overflow-hidden bg-slate-950/40 relative">
-                      <ReactFlow
-                        nodes={flowGraph.nodes}
-                        edges={flowGraph.edges}
-                        fitView
-                        nodesConnectable={false}
-                        nodesDraggable={false}
-                        zoomOnScroll={false}
-                        zoomOnPinch={false}
-                        zoomOnDoubleClick={false}
-                        panOnDrag={false}
-                        panOnScroll={false}
-                        preventScrolling={true}
-                      >
-                        <Background color="#1e293b" gap={16} size={1} />
-                        <Controls showInteractive={false} className="opacity-50" />
-                      </ReactFlow>
-                    </div>
-                  </div>
-                )}
-
-                {/* 8. Explainability & Audit Trail Timeline */}
-                {result.trace && (
-                  <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
-                    <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">LangGraph Execution Timeline (Audit Trail)</h3>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">Explainable Decision Timeline</h3>
                       <Clock className="h-4 w-4 text-slate-400" />
                     </div>
 
-                    <div className="flex flex-col gap-4 mt-2">
-                      {result.trace.map((step: string, idx: number) => (
-                        <div key={idx} className="flex gap-3 text-xs leading-relaxed items-start">
-                          <div className="h-5 w-5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
-                            {idx + 1}
+                    <div className="flex flex-col gap-5 mt-1">
+                      {buildDecisionTimeline(result, audit.score).map((phase, idx) => (
+                        <div key={idx} className="flex gap-3">
+                          <div className="flex flex-col items-center">
+                            <div className="h-6 w-6 bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0">
+                              {idx + 1}
+                            </div>
+                            <div className="flex-1 w-px bg-white/10 mt-1" />
                           </div>
-                          <div className="flex-1 text-slate-300 font-mono border-l border-white/5 pl-3 py-0.5">
-                            {step}
+                          <div className="flex-1 pb-1">
+                            <p className="text-sm font-semibold text-slate-200">
+                              <span className="text-indigo-400">PHASE {idx + 1}:</span> {phase.title}
+                            </p>
+                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div>
+                                <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-1">Evidence</p>
+                                <ul className="flex flex-col gap-1">
+                                  {phase.evidence.map((e, i) => (
+                                    <li key={i} className="text-xs text-slate-400 flex gap-1.5"><span className="text-slate-600">•</span><span>{e}</span></li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div>
+                                <p className="text-[10px] uppercase font-bold text-emerald-500/70 tracking-wider mb-1">Conclusion</p>
+                                <ul className="flex flex-col gap-1">
+                                  {phase.conclusion.map((e, i) => (
+                                    <li key={i} className="text-xs text-emerald-300/90 flex gap-1.5"><span className="text-emerald-500/60">→</span><span>{e}</span></li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       ))}
                     </div>
+
+                    {/* Raw execution log (collapsible) */}
+                    {result.trace && (
+                      <div className="border-t border-white/5 pt-3">
+                        <button
+                          onClick={() => setRawLogOpen(!rawLogOpen)}
+                          className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          {rawLogOpen ? "Hide" : "Show"} raw execution log ({result.trace.length} steps)
+                          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${rawLogOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        {rawLogOpen && (
+                          <div className="flex flex-col gap-1.5 mt-3">
+                            {result.trace.map((step: string, idx: number) => (
+                              <div key={idx} className="text-[11px] text-slate-400 font-mono border-l border-white/5 pl-3 py-0.5">
+                                {idx + 1}. {step}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
