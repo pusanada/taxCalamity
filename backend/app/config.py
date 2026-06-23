@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # call fails. Default False: production never serves mock data. Enable locally
     # (USE_MOCK_FALLBACK=true) to test the pipeline without hitting the LLM.
     USE_MOCK_FALLBACK: bool = False
+    
+    # SEC API Keys
+    SEC_FUND_FACTSHEET_KEY: Optional[str] = None
+    SEC_FUND_DAILY_INFO_KEY: Optional[str] = None
 
     VERBOSE: bool = True
 

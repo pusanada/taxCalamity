@@ -28,7 +28,7 @@ from backend.app.schemas.schemas import (
     ComplianceReportSchema
 )
 from backend.app.graph.workflow import app_workflow
-from backend.app.services.fund_catalog import seed_funds
+from backend.app.services.fund_catalog import seed_funds, sync_funds_from_sec
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -200,6 +200,22 @@ def get_report(session_id: str, db: Session = Depends(get_db)):
         "compliance": data.get("compliance"),
         "updated_at": wf_state.updated_at.isoformat()
     }
+
+
+@app.post("/api/v1/admin/sync-funds")
+async def sync_funds(db: Session = Depends(get_db)):
+    """
+    POST /api/v1/admin/sync-funds
+    Triggers an asynchronous synchronization with the Thai SEC API
+    to update the local database cache of active RMF, SSF, and ThaiESG funds.
+    """
+    try:
+        result = await sync_funds_from_sec(db)
+        if result.get("status") == "failed":
+            raise HTTPException(status_code=500, detail=result.get("error"))
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Synchronization failed: {str(e)}")
 
 
 @app.get("/api/v1/audit/{session_id}")

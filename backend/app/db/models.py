@@ -40,6 +40,7 @@ class Fund(Base):
     __tablename__ = "funds"
 
     id = Column(Integer, primary_key=True, index=True)
+    proj_id = Column(String, unique=True, index=True, nullable=True) # SEC Project ID (e.g. M0045_2565)
     name = Column(String, index=True, nullable=False)
     asset_class = Column(String, index=True, nullable=False) # e.g. Equity, Fixed Income
     risk_level = Column(Integer, nullable=False)            # 1 to 8
