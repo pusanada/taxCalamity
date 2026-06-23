@@ -286,6 +286,19 @@ def tax_engine_node(state: AdvisoryState) -> AdvisoryState:
                 "assessable_income": total_income,
                 "deductions_before": deductions_before,
                 "deductions_after": deductions_after,
+                # Itemized deductions so the UI can show the full calculation.
+                "deduction_breakdown": {
+                    "personal_allowance": personal_deduction,
+                    "expense_deduction": expense_deduction,
+                    "life_insurance": min(client.life_insurance, 100000.0),
+                    "ssf_before": min(client.existing_ssf, calculate_ssf_limit(total_income)),
+                    "rmf_before": min(client.existing_rmf, calculate_rmf_limit(total_income)),
+                    "ssf_after": opt_ssf,
+                    "rmf_after": opt_rmf,
+                    "thaiesg_after": opt_thaiesg,
+                },
+                "taxable_before": max(total_income - deductions_before, 0.0),
+                "taxable_after": max(total_income - deductions_after, 0.0),
                 "optimization_purchases": {
                     "ssf_additional": capacity["allowed_additional_ssf"],
                     "rmf_additional": capacity["allowed_additional_rmf"],

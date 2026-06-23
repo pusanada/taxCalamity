@@ -83,6 +83,8 @@ export default function Dashboard() {
 
   // Which audit card is expanded ('compliance' | 'uq' | null)
   const [auditOpen, setAuditOpen] = useState<null | "compliance" | "uq">(null);
+  // Tax calculation breakdown expanded?
+  const [taxOpen, setTaxOpen] = useState(false);
 
   const handleFileUpload = async (file?: File) => {
     if (!file) return;
@@ -629,8 +631,9 @@ export default function Dashboard() {
 
                 {/* 3. Tax Comparison and Savings */}
                 {result.tax_result && (
+                  <>
                   <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-                    
+
                     {/* Tax numbers */}
                     <div className="md:col-span-5 glass-panel p-6 border-white/5 flex flex-col justify-between gap-4">
                       <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Tax Optimization Results</h3>
@@ -656,6 +659,14 @@ export default function Dashboard() {
                           Deterministic calculations applied. Tax liability minimized from {formatTHB(result.tax_result.tax_before)} to {formatTHB(result.tax_result.tax_after)}.
                         </p>
                       </div>
+
+                      <button
+                        onClick={() => setTaxOpen(!taxOpen)}
+                        className="flex items-center justify-center gap-1.5 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
+                      >
+                        {taxOpen ? "Hide" : "View"} calculation breakdown
+                        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${taxOpen ? "rotate-180" : ""}`} />
+                      </button>
                     </div>
 
                     {/* SVG Chart Comparison */}
@@ -708,6 +719,62 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Tax calculation breakdown (expandable) */}
+                  {taxOpen && result.tax_result.detailed_calculations && (() => {
+                    const dc = result.tax_result.detailed_calculations;
+                    const bd = dc.deduction_breakdown || {};
+                    const taxableBefore = dc.taxable_before ?? (dc.assessable_income - dc.deductions_before);
+                    const taxableAfter = dc.taxable_after ?? (dc.assessable_income - dc.deductions_after);
+                    const rows = [
+                      { label: "Assessable income", before: dc.assessable_income, after: dc.assessable_income },
+                      { label: "− Personal allowance", before: bd.personal_allowance, after: bd.personal_allowance },
+                      { label: "− Expense deduction (50%, capped)", before: bd.expense_deduction, after: bd.expense_deduction },
+                      { label: "− Life / health insurance", before: bd.life_insurance, after: bd.life_insurance },
+                      { label: "− SSF", before: bd.ssf_before, after: bd.ssf_after },
+                      { label: "− RMF", before: bd.rmf_before, after: bd.rmf_after },
+                      { label: "− ThaiESG", before: 0, after: bd.thaiesg_after },
+                    ];
+                    return (
+                      <div className="glass-panel p-6 border-white/5 flex flex-col gap-3">
+                        <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Calculation Breakdown</h3>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm border-collapse">
+                            <thead>
+                              <tr className="text-slate-500 border-b border-white/5">
+                                <th className="py-2 text-left font-semibold text-xs uppercase">Step</th>
+                                <th className="py-2 text-right font-semibold text-xs uppercase">Before</th>
+                                <th className="py-2 text-right font-semibold text-xs uppercase">After</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map((r, i) => (
+                                <tr key={i} className="border-b border-white/5 text-slate-300">
+                                  <td className="py-2 text-slate-400">{r.label}</td>
+                                  <td className="py-2 text-right font-mono">{formatTHB(r.before)}</td>
+                                  <td className="py-2 text-right font-mono">{formatTHB(r.after)}</td>
+                                </tr>
+                              ))}
+                              <tr className="border-b border-white/5 text-slate-200 font-semibold">
+                                <td className="py-2">= Taxable income</td>
+                                <td className="py-2 text-right font-mono">{formatTHB(taxableBefore)}</td>
+                                <td className="py-2 text-right font-mono">{formatTHB(taxableAfter)}</td>
+                              </tr>
+                              <tr className="text-slate-200 font-bold">
+                                <td className="py-2">Progressive tax</td>
+                                <td className="py-2 text-right font-mono text-red-400">{formatTHB(result.tax_result.tax_before)}</td>
+                                <td className="py-2 text-right font-mono text-emerald-400">{formatTHB(result.tax_result.tax_after)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <p className="text-[10px] text-slate-500 leading-relaxed">
+                          Computed by the deterministic Thai PIT engine (progressive brackets). “After” maximizes SSF / RMF / ThaiESG within legal caps. Note: PVD and donations are not yet modeled.
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  </>
                 )}
 
                 {/* 4. Detailed Optimizations Investments */}
