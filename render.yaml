@@ -1,0 +1,30 @@
+# Render Blueprint for the TaxCalamity backend.
+# Deploy: push to GitHub, then in Render -> "New +" -> "Blueprint" -> pick this repo.
+# Set the secret env vars (GROQ_API_KEY, TYPHOON_API_KEY, CORS_ORIGINS) in the
+# Render dashboard after the first deploy.
+services:
+  - type: web
+    name: taxcalamity-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false            # set in dashboard (secret)
+      - key: LLM_MODEL
+        value: qwen/qwen3-32b
+      - key: TYPHOON_API_KEY
+        sync: false            # set in dashboard (secret); optional, falls back to Groq
+      - key: TYPHOON_MODEL
+        value: typhoon-v2.1-12b-instruct
+      - key: TYPHOON_API_BASE
+        value: https://api.opentyphoon.ai/v1
+      - key: CORS_ORIGINS
+        sync: false            # set to your Vercel frontend URL, e.g. https://taxcalamity.vercel.app
+      - key: DATABASE_URL
+        value: sqlite:////tmp/wealth_advisor.db
+      - key: CHECKPOINT_DB_PATH
+        value: /tmp/langgraph_checkpoints.sqlite
+      - key: VERBOSE
+        value: "false"

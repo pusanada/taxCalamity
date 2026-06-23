@@ -13,10 +13,10 @@ Combines natural language processing, deterministic tax calculations, fund recom
 
 ## Tech Stack
 
-**Backend:** FastAPI, LangGraph, CrewAI, SQLAlchemy, Pydantic v2, Groq API  
+**Backend:** FastAPI, LangGraph (SQLite checkpointer), SQLAlchemy, Pydantic v2  
 **Frontend:** Next.js 15, React 19, TailwindCSS, ReactFlow, Recharts  
-**LLM:** Qwen 3 32B (via Groq) for reasoning, Typhoon v2 70B for Thai NLP  
-**Infrastructure:** PostgreSQL, Redis, Qdrant (all via Docker Compose)
+**LLM:** Qwen 3 32B via Groq for reasoning; Typhoon for Thai NLP (auto-falls back to Groq if unavailable). Agents call the providers directly over their OpenAI-compatible APIs.  
+**Persistence:** SQLite by default (Postgres optional via `DATABASE_URL`)
 
 ---
 
@@ -88,25 +88,27 @@ git checkout prototype
 Create a `.env` file in the project root:
 
 ```env
-APP_NAME=Chief Wealth Intelligence Platform
 VERBOSE=false
-DATABASE_URL=sqlite:///wealth_advisor.db
+DATABASE_URL=sqlite:///./wealth_advisor.db
+CHECKPOINT_DB_PATH=./langgraph_checkpoints.sqlite
 
-# Groq API (powers Qwen reasoning agents)
+# CORS: comma-separated allowed frontend origins ("*" for local dev)
+CORS_ORIGINS=*
+
+# Groq API (powers all reasoning agents — Qwen 3 32B). Free key: console.groq.com
 GROQ_API_KEY=gsk_your_groq_api_key_here
 LLM_MODEL=qwen/qwen3-32b
 
-# Typhoon API (powers Thai language pre-processing)
+# Typhoon API (Thai NLP). Free tier: opentyphoon.ai
+# Optional — if the key is missing/invalid, the Thai interpreter falls back to Groq.
 TYPHOON_API_KEY=your_typhoon_api_key_here
-TYPHOON_MODEL=typhoon-v2-70b-instruct
+TYPHOON_MODEL=typhoon-v2.1-12b-instruct
 TYPHOON_API_BASE=https://api.opentyphoon.ai/v1
-
-# Infrastructure (when using Docker)
-POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/wealth_advisor
-REDIS_URL=redis://localhost:6379
 ```
 
-**No API keys?** The platform falls back to deterministic mock responses, so you can explore the full workflow without any LLM provider.
+For the frontend, set `NEXT_PUBLIC_API_URL` (in `frontend/.env.local` locally, or in Vercel) to the backend URL. It defaults to `http://localhost:8000`.
+
+**No API keys?** The platform falls back to deterministic mock responses, so you can explore the full workflow without any LLM provider. See `.env.example` for a complete template.
 
 ### 3. Start Backend
 
@@ -136,6 +138,39 @@ docker-compose up -d
 ```
 
 This starts PostgreSQL 15, Redis 7, and Qdrant. Update `DATABASE_URL` in `.env` to the PostgreSQL connection string.
+
+---
+
+## Deployment
+
+Recommended split: **backend on Render** (Docker), **frontend on Vercel**.
+
+### Backend → Render
+
+The repo includes a `Dockerfile` (build context = repo root) and a `render.yaml` Blueprint.
+
+1. Push the repo to GitHub.
+2. In Render: **New + → Blueprint**, select the repo. It reads `render.yaml`.
+3. Set the secret env vars in the Render dashboard:
+   - `GROQ_API_KEY` — your Groq key
+   - `TYPHOON_API_KEY` — optional (falls back to Groq if omitted)
+   - `CORS_ORIGINS` — your Vercel frontend URL, e.g. `https://your-app.vercel.app` (no trailing slash)
+4. Deploy. The health check is `GET /`. Note the service URL.
+
+> On Render's free tier the filesystem is ephemeral, so `DATABASE_URL` and `CHECKPOINT_DB_PATH` point at `/tmp`. State resets when the instance restarts — fine for a demo. For durable state, attach a Render Disk or use a managed Postgres.
+
+### Frontend → Vercel
+
+1. In Vercel: **Add New → Project**, import the repo, set the **Root Directory** to `frontend`.
+2. Add env var `NEXT_PUBLIC_API_URL` = your Render backend URL.
+3. Deploy. Update the backend's `CORS_ORIGINS` to the resulting Vercel URL.
+
+### Local Docker (backend only)
+
+```bash
+docker build -t taxcalamity-backend .
+docker run -p 8000:8000 --env-file .env taxcalamity-backend
+```
 
 ---
 

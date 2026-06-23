@@ -1,7 +1,11 @@
 from typing import TypedDict, List, Optional, Dict, Any
+import sqlite3
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 import datetime
+
+from backend.app.config import settings
 
 from backend.app.schemas.schemas import (
     ClientIntakeSchema,
@@ -130,15 +134,18 @@ def typhoon_interpreter_node(state: AdvisoryState) -> AdvisoryState:
         # Log Agent Run
         log_agent_run_to_db(state["session_id"], "Thai Financial Interpreter Agent", state["raw_input_text"], typhoon_result)
         
-        # Check Quality Control Confidence Threshold
+        # Quality Control: a low confidence score is a NON-BLOCKING warning.
+        # We still run the full pipeline (defaults fill any gaps) so the advisor
+        # can review a complete recommendation at the human_review checkpoint,
+        # where the low-confidence flag is surfaced. Branching straight to
+        # human_review here would skip intake/tax/recommendation and break the
+        # downstream compliance step.
         if typhoon_result.confidence < 0.80:
             state["trace"].append(
-                f"[Typhoon Interpreter Node] WARNING: Confidence {typhoon_result.confidence:.2f} is below 0.80 threshold. "
-                f"Flagging requires manual human review."
+                f"[Typhoon Interpreter Node] WARNING: Confidence {typhoon_result.confidence:.2f} is below the 0.80 "
+                f"threshold. Recommendation built on defaults for missing fields; manual verification advised."
             )
-            state["status"] = "human_review"
-        else:
-            state["status"] = "client_intake"
+        state["status"] = "client_intake"
     except Exception as e:
         state["trace"].append(f"[Typhoon Interpreter Node] Failed: {str(e)}")
         state["status"] = "failed"
@@ -397,11 +404,20 @@ def human_review_node(state: AdvisoryState) -> AdvisoryState:
 def compliance_node(state: AdvisoryState) -> AdvisoryState:
     state["trace"].append("[Compliance Node] Initiating SEC regulatory check and return audit...")
     try:
+        # Pass the client's original demand (translation + raw text) so the auditor
+        # can catch client-side guarantee demands scrubbed from the explanation.
+        typ = state.get("typhoon_result")
+        client_context = " | ".join(filter(None, [
+            typ.english_translation if typ else None,
+            typ.normalized_thai if typ else None,
+            state.get("raw_input_text"),
+        ]))
         compliance = run_compliance_audit_crew(
             state["client_data"],
             state["tax_result"],
             state["recommendation"],
-            state["explanation"]
+            state["explanation"],
+            client_context,
         )
         state["compliance"] = compliance
         
@@ -540,9 +556,32 @@ workflow.add_conditional_edges("report", route_flow, {
     "__end__": END
 })
 
-# Compile graph using checkpointer memory saver
-# This allows us to pause and resume states cleanly using thread IDs
-checkpointer = MemorySaver()
+# Compile graph using a SQLite-backed checkpointer so pause/resume survives
+# across separate HTTP requests (and process restarts within an instance).
+# check_same_thread=False because FastAPI serves handlers from a threadpool.
+_checkpoint_conn = sqlite3.connect(settings.CHECKPOINT_DB_PATH, check_same_thread=False)
+# Allow our own Pydantic schema module to round-trip through the checkpoint
+# serializer. Without this, newer langgraph versions will block deserializing
+# these custom types (currently only a warning).
+_SCHEMA_MODULE = "backend.app.schemas.schemas"
+_serde = JsonPlusSerializer(
+    allowed_msgpack_modules=[
+        (_SCHEMA_MODULE, name)
+        for name in (
+            "TyphoonEntitiesSchema",
+            "TyphoonOutputSchema",
+            "ClientIntakeSchema",
+            "SuitabilitySchema",
+            "TaxOutputSchema",
+            "FundDetail",
+            "FundRecommendationSchema",
+            "ExplanationDetail",
+            "ExplanationSchema",
+            "ComplianceReportSchema",
+        )
+    ]
+)
+checkpointer = SqliteSaver(_checkpoint_conn, serde=_serde)
 app_workflow = workflow.compile(
     checkpointer=checkpointer,
     interrupt_after=["human_review"]

@@ -9,18 +9,32 @@ class Settings(BaseSettings):
     # LLM Settings
     GROQ_API_KEY: Optional[str] = None
     OPENAI_API_KEY: str = "mock-key"
-    LLM_MODEL: str = "qwen-2.5-32b"
+    LLM_MODEL: str = "qwen/qwen3-32b"
     
     # Typhoon Settings
     TYPHOON_API_KEY: Optional[str] = None
     TYPHOON_API_BASE: str = "https://api.opentyphoon.ai/v1"
-    TYPHOON_MODEL: str = "typhoon-v1.5-instruct"
+    TYPHOON_MODEL: str = "typhoon-v2.1-12b-instruct"
     
     # Database & Cache Settings
     DATABASE_URL: str = "sqlite:///./wealth_advisor.db"
     REDIS_URL: str = "redis://localhost:6379"
-    
+    CHECKPOINT_DB_PATH: str = "./langgraph_checkpoints.sqlite"
+
+    # CORS: comma-separated list of allowed frontend origins.
+    # Default "*" is convenient for local dev; set explicitly in production.
+    CORS_ORIGINS: str = "*"
+
+    # When True, agents fall back to deterministic mock responses if a live LLM
+    # call fails. Default False: production never serves mock data. Enable locally
+    # (USE_MOCK_FALLBACK=true) to test the pipeline without hitting the LLM.
+    USE_MOCK_FALLBACK: bool = False
+
     VERBOSE: bool = True
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",

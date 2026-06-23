@@ -1,4 +1,5 @@
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -29,32 +30,37 @@ from backend.app.schemas.schemas import (
 from backend.app.graph.workflow import app_workflow
 from backend.app.services.fund_catalog import seed_funds
 
-app = FastAPI(
-    title=settings.APP_NAME,
-    description="Production-grade API for Wealth Advisory, Thai tax optimization, and human-in-the-loop audit.",
-    version="1.0.0"
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: initialize the database and seed the fund catalog.
     init_db()
     db = SessionLocal()
-    # Handle seeder
     try:
         seed_funds(db)
     except Exception as e:
         print(f"Startup seeder error: {str(e)}")
     finally:
         db.close()
+    yield
+
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="Production-grade API for Wealth Advisory, Thai tax optimization, and human-in-the-loop audit.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS middleware. Origins are configurable via the CORS_ORIGINS env var.
+# allow_credentials must be False when origins is wildcard (browser rule).
+_cors_origins = settings.cors_origins_list
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=("*" not in _cors_origins),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():

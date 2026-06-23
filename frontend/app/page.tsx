@@ -19,6 +19,10 @@ import {
 import { ReactFlow, Background, Controls } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+// Backend base URL. Set NEXT_PUBLIC_API_URL in the deployment environment
+// (e.g. the Render backend URL); falls back to localhost for local dev.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 const PRESETS = [
   {
     name: "Client A (Salary, Compliant)",
@@ -50,7 +54,7 @@ export default function Dashboard() {
 
   const fetchFlowGraph = async (sid: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/session/${sid}`);
+      const res = await fetch(`${API_URL}/api/v1/session/${sid}`);
       if (res.ok) {
         const data = await res.json();
         setFlowGraph(data.flow_graph);
@@ -69,7 +73,7 @@ export default function Dashboard() {
     
     try {
       setStatusText("Agent 1: Interpreting Thai financial conversation (Typhoon)...");
-      const response = await fetch("http://localhost:8000/api/v1/analyze", {
+      const response = await fetch(`${API_URL}/api/v1/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -101,7 +105,7 @@ export default function Dashboard() {
     setStatusText("Resuming workflow and running compliance checks...");
     
     try {
-      const response = await fetch("http://localhost:8000/api/v1/recommend", {
+      const response = await fetch(`${API_URL}/api/v1/recommend`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
