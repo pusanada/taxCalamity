@@ -133,6 +133,7 @@ async def analyze_profile(request: AdvisoryWorkflowRequest):
     initial_state = {
         "session_id": session_id,
         "raw_input_text": request.raw_input_text,
+        "overrides": request.overrides or {},
         "client_data": None,
         "suitability": None,
         "tax_result": None,

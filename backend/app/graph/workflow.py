@@ -48,6 +48,7 @@ from backend.app.db.models import (
 class AdvisoryState(TypedDict):
     session_id: str
     raw_input_text: str
+    overrides: Optional[Dict[str, Any]]
     typhoon_result: Optional[TyphoonOutputSchema]
     client_data: Optional[ClientIntakeSchema]
     suitability: Optional[SuitabilitySchema]
@@ -125,6 +126,26 @@ def typhoon_interpreter_node(state: AdvisoryState) -> AdvisoryState:
     state["trace"].append("[Typhoon Interpreter Node] Pre-processing Thai conversational input...")
     try:
         typhoon_result = run_typhoon_interpreter_crew(state["raw_input_text"])
+
+        # Apply advisor-provided overrides as authoritative values. This bypasses
+        # LLM re-extraction so an explicit value (including 0) is always honored.
+        overrides = state.get("overrides") or {}
+        if overrides:
+            entities = typhoon_result.entities
+            applied = []
+            for key, value in overrides.items():
+                if value is None or not hasattr(entities, key):
+                    continue
+                setattr(entities, key, value)
+                applied.append(key)
+            if applied:
+                typhoon_result.missing_information = [
+                    m for m in typhoon_result.missing_information if m not in applied
+                ]
+                state["trace"].append(
+                    f"[Typhoon Interpreter Node] Applied advisor overrides: {', '.join(applied)}"
+                )
+
         state["typhoon_result"] = typhoon_result
         state["trace"].append(
             f"[Typhoon Interpreter Node] Processed. Confidence: {typhoon_result.confidence:.2f}. "

@@ -82,6 +82,10 @@ class ComplianceReportSchema(BaseModel):
 class AdvisoryWorkflowRequest(BaseModel):
     raw_input_text: str = Field(..., min_length=1, description="Raw conversational transcript of client details")
     session_id: Optional[str] = Field(default=None, description="Optional session tracker")
+    overrides: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Advisor-provided authoritative profile values (e.g. {'rmf': 0}) merged into extracted entities, bypassing LLM re-extraction."
+    )
 
 
 class AdvisoryWorkflowResponse(BaseModel):

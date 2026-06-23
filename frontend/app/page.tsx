@@ -225,7 +225,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleRunWorkflow = async (textOverride?: string) => {
+  const handleRunWorkflow = async (textOverride?: string, overrides?: Record<string, any>) => {
     const inputForRun = typeof textOverride === "string" ? textOverride : inputText;
     setLoading(true);
     setError(null);
@@ -239,7 +239,10 @@ export default function Dashboard() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ raw_input_text: inputForRun })
+        body: JSON.stringify({
+          raw_input_text: inputForRun,
+          ...(overrides && Object.keys(overrides).length ? { overrides } : {}),
+        })
       });
 
       if (!response.ok) {
@@ -289,17 +292,21 @@ export default function Dashboard() {
   // analysis (a fresh session) so the supplemental data is incorporated.
   const applyOptionalInfo = () => {
     if (!result) return;
-    const parts = getMissingFields(result)
-      .map((f) => {
-        const v = optionalInputs[f.key];
-        return v && v.trim() ? `${f.label.replace(/ \(.*\)/, "")}: ${v.trim()}` : null;
-      })
-      .filter(Boolean) as string[];
-    if (!parts.length) return;
-    const augmented = `${inputText}\n\n[Additional details provided by advisor] ${parts.join("; ")}`;
-    setInputText(augmented);
+    const overrides: Record<string, any> = {};
+    for (const f of getMissingFields(result)) {
+      const raw = optionalInputs[f.key];
+      if (raw == null || String(raw).trim() === "") continue;
+      if (f.type === "number") {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) overrides[f.key] = n; // 0 is a valid, authoritative value
+      } else {
+        overrides[f.key] = String(raw).trim();
+      }
+    }
+    if (!Object.keys(overrides).length) return;
     setOptionalInputs({});
-    handleRunWorkflow(augmented);
+    // Re-run a fresh analysis with the values treated as ground truth (no LLM re-extraction).
+    handleRunWorkflow(undefined, overrides);
   };
 
   // Helper to format currency
