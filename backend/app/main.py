@@ -1,0 +1,323 @@
+import uuid
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any, Optional
+
+from backend.app.config import settings
+from backend.app.db.database import get_db, init_db, SessionLocal
+from backend.app.db.models import (
+    Client, 
+    FinancialProfile, 
+    Recommendation, 
+    AuditLog, 
+    AgentRun, 
+    WorkflowState, 
+    ComplianceFlag, 
+    CrewExecution
+)
+from backend.app.schemas.schemas import (
+    AdvisoryWorkflowRequest,
+    AdvisoryWorkflowResponse,
+    ClientIntakeSchema,
+    SuitabilitySchema,
+    TaxOutputSchema,
+    FundRecommendationSchema,
+    ExplanationSchema,
+    ComplianceReportSchema
+)
+from backend.app.graph.workflow import app_workflow
+from backend.app.services.fund_catalog import seed_funds
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="Production-grade API for Wealth Advisory, Thai tax optimization, and human-in-the-loop audit.",
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+    db = SessionLocal()
+    # Handle seeder
+    try:
+        seed_funds(db)
+    except Exception as e:
+        print(f"Startup seeder error: {str(e)}")
+    finally:
+        db.close()
+
+@app.get("/")
+def read_root():
+    return {
+        "status": "healthy",
+        "service": settings.APP_NAME,
+        "api_version": "v1"
+    }
+
+@app.post("/api/v1/analyze", response_model=AdvisoryWorkflowResponse)
+async def analyze_profile(request: AdvisoryWorkflowRequest):
+    """
+    POST /api/v1/analyze
+    Analyzes raw client conversational transcript, extracting profile, calculating taxes,
+    selecting portfolio, generating explanations, and pauses at the Human Review checkpoint.
+    """
+    session_id = request.session_id or f"sess-{uuid.uuid4().hex[:12]}"
+    config = {"configurable": {"thread_id": session_id}}
+    
+    # Check if there is an active workflow running for this session
+    db = next(get_db())
+    existing = db.query(WorkflowState).filter(WorkflowState.session_id == session_id).first()
+    if existing:
+        # If it is already paused at review, return the current state
+        state_data = existing.state_data
+        return AdvisoryWorkflowResponse(
+            session_id=session_id,
+            typhoon_result=state_data.get("typhoon_result"),
+            client_data=state_data.get("client_data"),
+            suitability=state_data.get("suitability"),
+            tax_result=state_data.get("tax_result"),
+            recommendation=state_data.get("recommendation"),
+            explanation=state_data.get("explanation"),
+            compliance=state_data.get("compliance"),
+            status=existing.current_node,
+            trace=state_data.get("trace", [])
+        )
+        
+    initial_state = {
+        "session_id": session_id,
+        "raw_input_text": request.raw_input_text,
+        "client_data": None,
+        "suitability": None,
+        "tax_result": None,
+        "recommendation": None,
+        "explanation": None,
+        "compliance": None,
+        "status": "client_intake",
+        "trace": [f"[Orchestrator] Initialized wealth advisory session: {session_id}"]
+    }
+    
+    try:
+        # Run workflow: will execute intake -> suitability -> tax -> recommendation -> explanation
+        # and pause right before compliance (at the human_review node).
+        final_state = app_workflow.invoke(initial_state, config=config)
+        
+        # Save trace logs
+        return AdvisoryWorkflowResponse(
+            session_id=session_id,
+            typhoon_result=final_state.get("typhoon_result"),
+            client_data=final_state.get("client_data"),
+            suitability=final_state.get("suitability"),
+            tax_result=final_state.get("tax_result"),
+            recommendation=final_state.get("recommendation"),
+            explanation=final_state.get("explanation"),
+            compliance=final_state.get("compliance"),
+            status=final_state.get("status"),
+            trace=final_state.get("trace", [])
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis pipeline failed: {str(e)}")
+
+
+@app.post("/api/v1/recommend", response_model=AdvisoryWorkflowResponse)
+async def approve_recommendation(request: Dict[str, Any]):
+    """
+    POST /api/v1/recommend
+    Resumes the LangGraph workflow after human approval. Moves to compliance checks
+    and generates final reports.
+    """
+    session_id = request.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id parameter")
+        
+    config = {"configurable": {"thread_id": session_id}}
+    
+    try:
+        # Fetch current graph state
+        current_state = app_workflow.get_state(config)
+        if not current_state or not current_state.values:
+            raise HTTPException(status_code=404, detail="Advisory session state not found")
+            
+        # Update the status to direct the routing logic to 'compliance'
+        app_workflow.update_state(config, {"status": "compliance", "trace": current_state.values.get("trace", []) + ["[Human Review Node] Advisor APPROVED portfolio. Proceeding to SEC Audit..."]}, as_node="human_review")
+        
+        # Resume flow (re-entry)
+        final_state = app_workflow.invoke(None, config=config)
+        
+        return AdvisoryWorkflowResponse(
+            session_id=session_id,
+            typhoon_result=final_state.get("typhoon_result"),
+            client_data=final_state.get("client_data"),
+            suitability=final_state.get("suitability"),
+            tax_result=final_state.get("tax_result"),
+            recommendation=final_state.get("recommendation"),
+            explanation=final_state.get("explanation"),
+            compliance=final_state.get("compliance"),
+            status=final_state.get("status"),
+            trace=final_state.get("trace", [])
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resume workflow: {str(e)}")
+
+
+@app.get("/api/v1/report/{session_id}")
+def get_report(session_id: str, db: Session = Depends(get_db)):
+    """
+    GET /api/v1/report/{id}
+    Retrieves the final wealth advisory report for a given session.
+    """
+    wf_state = db.query(WorkflowState).filter(WorkflowState.session_id == session_id).first()
+    if not wf_state:
+        raise HTTPException(status_code=404, detail="Advisory report session not found")
+        
+    data = wf_state.state_data
+    if data.get("status") not in ["completed", "report"]:
+        raise HTTPException(status_code=400, detail="Report generation is not complete. Human review may still be pending.")
+        
+    return {
+        "session_id": session_id,
+        "typhoon_result": data.get("typhoon_result"),
+        "client_profile": data.get("client_data"),
+        "suitability": data.get("suitability"),
+        "tax_savings": data.get("tax_result"),
+        "recommended_portfolio": data.get("recommendation"),
+        "explanation": data.get("explanation"),
+        "compliance": data.get("compliance"),
+        "updated_at": wf_state.updated_at.isoformat()
+    }
+
+
+@app.get("/api/v1/audit/{session_id}")
+def get_audit_trail(session_id: str, db: Session = Depends(get_db)):
+    """
+    GET /api/v1/audit/{id}
+    Retrieves full audit logs, agent runs payloads, and compliance flags.
+    """
+    logs = db.query(AuditLog).filter(AuditLog.session_id == session_id).all()
+    flags = db.query(ComplianceFlag).filter(ComplianceFlag.session_id == session_id).all()
+    runs = db.query(AgentRun).filter(AgentRun.session_id == session_id).all()
+    execution = db.query(CrewExecution).filter(CrewExecution.session_id == session_id).first()
+    
+    return {
+        "session_id": session_id,
+        "execution_summary": {
+            "status": execution.status if execution else "PENDING",
+            "tokens_used": execution.tokens_used if execution else 0,
+            "cost_usd": execution.cost if execution else 0.0,
+            "trace": execution.full_trace if execution else []
+        },
+        "audit_logs": [
+            {
+                "agent_name": l.agent_name,
+                "action": l.action,
+                "detail": l.detail,
+                "is_compliant": l.is_compliant,
+                "timestamp": l.timestamp.isoformat()
+            } for l in logs
+        ],
+        "compliance_flags": [
+            {
+                "rule_name": f.rule_name,
+                "description": f.description,
+                "severity": f.severity,
+                "status": f.status,
+                "created_at": f.created_at.isoformat()
+            } for f in flags
+        ],
+        "agent_runs": [
+            {
+                "agent_role": r.agent_role,
+                "input": r.input_payload,
+                "output": r.output_payload,
+                "timestamp": r.timestamp.isoformat()
+            } for r in runs
+        ]
+    }
+
+
+@app.get("/api/v1/session/{session_id}")
+def get_session(session_id: str, db: Session = Depends(get_db)):
+    """
+    GET /api/v1/session/{id}
+    Retrieves the raw session data and returns custom React Flow nodes and edges
+    representing the active path of the LangGraph workflow.
+    """
+    wf_state = db.query(WorkflowState).filter(WorkflowState.session_id == session_id).first()
+    if not wf_state:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    state_data = wf_state.state_data
+    current_node = wf_state.current_node
+    
+    # 1. Define nodes for React Flow
+    flow_steps = [
+        ("typhoon_interpreter", "Typhoon Interpreter"),
+        ("client_intake", "Client Intake Agent"),
+        ("suitability", "Suitability Analyst"),
+        ("tax_engine", "Tax Deterministic Core"),
+        ("recommendation", "Fund Selection Core"),
+        ("explanation", "Narrative Interpreter"),
+        ("human_review", "Human Review Point"),
+        ("compliance", "SEC Compliance Auditor"),
+        ("report", "Report Formatter")
+    ]
+    
+    nodes = []
+    edges = []
+    
+    # Map step coordinates and status
+    active_found = False
+    for idx, (node_id, label) in enumerate(flow_steps):
+        # Determine status of each node in the path
+        if node_id == current_node:
+            status = "active"
+            active_found = True
+        elif not active_found:
+            status = "completed"
+        else:
+            status = "pending"
+            
+        nodes.append({
+            "id": node_id,
+            "data": {"label": label, "status": status},
+            "position": {"x": 250, "y": idx * 80},
+            "style": {
+                "background": "#1e293b" if status == "pending" else ("#4f46e5" if status == "active" else "#047857"),
+                "color": "#fff",
+                "border": "1px solid " + ("#475569" if status == "pending" else ("#818cf8" if status == "active" else "#34d399")),
+                "borderRadius": "8px",
+                "padding": "10px",
+                "fontSize": "12px",
+                "fontWeight": "bold",
+                "boxShadow": "0 0 15px rgba(79, 70, 229, 0.4)" if status == "active" else "none"
+            }
+        })
+        
+        # Link to next node
+        if idx < len(flow_steps) - 1:
+            edges.append({
+                "id": f"e-{node_id}-{flow_steps[idx+1][0]}",
+                "source": node_id,
+                "target": flow_steps[idx+1][0],
+                "animated": (status == "completed"),
+                "style": {"stroke": "#34d399" if status == "completed" else "#475569"}
+            })
+            
+    return {
+        "session_id": session_id,
+        "current_node": current_node,
+        "state_data": state_data,
+        "flow_graph": {
+            "nodes": nodes,
+            "edges": edges
+        }
+    }
