@@ -14,7 +14,9 @@ import {
   RefreshCw,
   Coins,
   AlertTriangle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  ChevronDown,
+  Gauge
 } from 'lucide-react';
 import { ReactFlow, Background, Controls } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -42,6 +44,29 @@ const PRESETS = [
   }
 ];
 
+// Uncertainty-Quantification (UQ) audit: a transparent confidence score for the
+// whole advisory run, derived from signals the pipeline already produced.
+function computeAudit(result: any) {
+  const t = result?.typhoon_result;
+  const conf = Math.round((t?.confidence ?? 0) * 100);
+  const missing = t?.missing_information?.length ?? 0;
+  const completeness = Math.max(0, 100 - missing * 12);
+  const comp = result?.compliance;
+  const complianceScore = comp
+    ? (comp.status === "approved" ? 100 : Math.max(30, 100 - (comp.violations?.length ?? 0) * 30))
+    : 70;
+  const funds = result?.recommendation?.recommended_funds?.length ?? 0;
+  const fit = funds > 0 ? 100 : 50;
+  const factors = [
+    { label: "NLP Extraction Confidence", value: conf, weight: 0.30, note: "Typhoon interpreter certainty" },
+    { label: "Profile Completeness", value: completeness, weight: 0.30, note: missing ? `${missing} field(s) missing` : "All key fields present" },
+    { label: "Compliance Integrity", value: complianceScore, weight: 0.25, note: comp ? (comp.status === "approved" ? "No violations" : `${comp.violations?.length ?? 0} violation(s)`) : "Pending advisor approval" },
+    { label: "Recommendation Coverage", value: fit, weight: 0.15, note: funds ? `${funds} fund(s) matched` : "No funds matched" },
+  ];
+  const score = Math.round(factors.reduce((s, f) => s + f.value * f.weight, 0));
+  return { score, factors };
+}
+
 export default function Dashboard() {
   const [inputText, setInputText] = useState(PRESETS[0].text);
   const [loading, setLoading] = useState(false);
@@ -55,6 +80,9 @@ export default function Dashboard() {
   // File upload state
   const [fileLoading, setFileLoading] = useState(false);
   const [fileInfo, setFileInfo] = useState<string | null>(null);
+
+  // Which audit card is expanded ('compliance' | 'uq' | null)
+  const [auditOpen, setAuditOpen] = useState<null | "compliance" | "uq">(null);
 
   const handleFileUpload = async (file?: File) => {
     if (!file) return;
@@ -162,6 +190,8 @@ export default function Dashboard() {
     if (val === undefined || val === null) return "฿0.00";
     return new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(val);
   };
+
+  const audit = result ? computeAudit(result) : null;
 
   return (
     <div className="min-h-screen pb-16 bg-[#080d16] text-[#f3f4f6] font-sans selection:bg-indigo-600 selection:text-white">
@@ -422,6 +452,96 @@ export default function Dashboard() {
                     <span className="text-lg font-semibold text-emerald-400">{result.client_data?.goal ?? "N/A"}</span>
                   </div>
                 </div>
+
+                {/* 1b. Audit Summary — clickable Compliance + UQ cards */}
+                {audit && (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Compliance card */}
+                      <button
+                        onClick={() => setAuditOpen(auditOpen === "compliance" ? null : "compliance")}
+                        className="glass-panel p-5 border-white/5 text-left hover:border-white/20 transition-colors flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3">
+                          {result.compliance ? (
+                            result.compliance.status === "approved" ? (
+                              <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20"><ShieldCheck className="h-6 w-6" /></div>
+                            ) : (
+                              <div className="p-2 bg-red-500/10 text-red-400 rounded-lg border border-red-500/20"><ShieldAlert className="h-6 w-6" /></div>
+                            )
+                          ) : (
+                            <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg border border-amber-500/20"><Clock className="h-6 w-6" /></div>
+                          )}
+                          <div>
+                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Compliance</p>
+                            <p className={`text-lg font-bold ${result.compliance ? (result.compliance.status === "approved" ? "text-emerald-400" : "text-red-400") : "text-amber-400"}`}>
+                              {result.compliance ? (result.compliance.status === "approved" ? "Compliant" : "Violation") : "Pending"}
+                            </p>
+                          </div>
+                        </div>
+                        <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${auditOpen === "compliance" ? "rotate-180" : ""}`} />
+                      </button>
+
+                      {/* UQ audit card */}
+                      <button
+                        onClick={() => setAuditOpen(auditOpen === "uq" ? null : "uq")}
+                        className="glass-panel p-5 border-white/5 text-left hover:border-white/20 transition-colors flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded-lg border ${audit.score >= 80 ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : audit.score >= 60 ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>
+                            <Gauge className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">UQ Audit · Confidence</p>
+                            <p className={`text-lg font-bold ${audit.score >= 80 ? "text-emerald-400" : audit.score >= 60 ? "text-amber-400" : "text-red-400"}`}>{audit.score}%</p>
+                          </div>
+                        </div>
+                        <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${auditOpen === "uq" ? "rotate-180" : ""}`} />
+                      </button>
+                    </div>
+
+                    {/* Compliance breakdown */}
+                    {auditOpen === "compliance" && (
+                      <div className="glass-panel p-5 border-white/5 flex flex-col gap-2">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Compliance Breakdown</p>
+                        {!result.compliance ? (
+                          <p className="text-xs text-amber-300">The SEC audit runs after you approve the recommendation. Click “Approve &amp; Submit Compliance” above.</p>
+                        ) : result.compliance.violations?.length > 0 ? (
+                          <div className="flex flex-col gap-1.5">
+                            {result.compliance.violations.map((v: string, i: number) => (
+                              <div key={i} className="p-2.5 bg-red-500/5 border border-red-500/15 rounded-md text-xs text-red-300 flex items-start gap-2">
+                                <span className="text-red-400 font-bold shrink-0">•</span><span>{v}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-2.5 bg-emerald-500/5 border border-emerald-500/15 rounded-md text-xs text-emerald-300 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4 shrink-0" /> All SEC checks passed — no return guarantees or risk mismatches.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* UQ breakdown */}
+                    {auditOpen === "uq" && (
+                      <div className="glass-panel p-5 border-white/5 flex flex-col gap-3">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Uncertainty Breakdown · weighted to {audit.score}%</p>
+                        {audit.factors.map((f, i) => (
+                          <div key={i} className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-300">{f.label} <span className="text-slate-600">· {Math.round(f.weight * 100)}% weight</span></span>
+                              <span className="font-mono font-semibold text-slate-200">{f.value}%</span>
+                            </div>
+                            <div className="h-1.5 bg-slate-800/60 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${f.value >= 80 ? "bg-emerald-500" : f.value >= 60 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${f.value}%` }} />
+                            </div>
+                            <span className="text-[10px] text-slate-500">{f.note}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* 2. Typhoon Pre-processing Layer Details */}
                 {result.typhoon_result && (
