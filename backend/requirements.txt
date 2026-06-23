@@ -16,6 +16,9 @@ openai>=1.14.0
 langgraph>=1.2.0,<2.0.0
 langgraph-checkpoint-sqlite>=3.1.0,<4.0.0
 
+# Document parsing (PDF text extraction; images go to the Groq vision model)
+pymupdf>=1.24.0
+
 # Database
 sqlalchemy>=2.0.0
 # psycopg2-binary>=2.9.0  # uncomment if using PostgreSQL instead of SQLite

@@ -52,6 +52,33 @@ export default function Dashboard() {
   const [result, setResult] = useState<any>(null);
   const [flowGraph, setFlowGraph] = useState<any>(null);
 
+  // File upload state
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileInfo, setFileInfo] = useState<string | null>(null);
+
+  const handleFileUpload = async (file?: File) => {
+    if (!file) return;
+    setFileLoading(true);
+    setError(null);
+    setFileInfo(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${API_URL}/api/v1/extract-file`, { method: "POST", body: fd });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail || `Extraction failed (status ${res.status})`);
+      }
+      const data = await res.json();
+      setInputText(data.extracted_text || "");
+      setFileInfo(`Extracted from ${data.source} · review and edit before running`);
+    } catch (err: any) {
+      setError(err.message || "Failed to read the file.");
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
   const fetchFlowGraph = async (sid: string) => {
     try {
       const res = await fetch(`${API_URL}/api/v1/session/${sid}`);
@@ -195,6 +222,43 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* File Upload */}
+              <div className="flex flex-col gap-2 mt-2">
+                <span className="text-[10px] uppercase font-bold text-slate-500">Or upload a document</span>
+                <label
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleFileUpload(e.dataTransfer.files?.[0]);
+                  }}
+                  className="cursor-pointer border border-dashed border-white/15 hover:border-indigo-500 rounded-lg p-4 flex flex-col items-center justify-center gap-1.5 text-center transition-colors bg-slate-950/40"
+                >
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    className="hidden"
+                    onChange={(e) => handleFileUpload(e.target.files?.[0] ?? undefined)}
+                  />
+                  {fileLoading ? (
+                    <>
+                      <RefreshCw className="h-5 w-5 text-indigo-400 animate-spin" />
+                      <span className="text-xs text-indigo-300">Reading document (Typhoon vision)…</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="h-5 w-5 text-slate-400" />
+                      <span className="text-xs text-slate-400">Click or drag a file here</span>
+                      <span className="text-[10px] text-slate-600">PDF · JPG · PNG — payslip, tax form, fund statement</span>
+                    </>
+                  )}
+                </label>
+                {fileInfo && (
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                    <CheckCircle className="h-3 w-3" /> {fileInfo}
+                  </span>
+                )}
               </div>
 
               {/* Input Textarea */}

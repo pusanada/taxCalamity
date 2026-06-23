@@ -1,7 +1,8 @@
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 
@@ -29,6 +30,9 @@ from backend.app.schemas.schemas import (
 )
 from backend.app.graph.workflow import app_workflow
 from backend.app.services.fund_catalog import seed_funds
+from backend.app.services.file_extract import extract_text_from_file
+
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -69,6 +73,33 @@ def read_root():
         "service": settings.APP_NAME,
         "api_version": "v1"
     }
+
+@app.post("/api/v1/extract-file")
+async def extract_file(file: UploadFile = File(...)):
+    """
+    POST /api/v1/extract-file
+    Accepts a PDF, JPG, JPEG, or PNG of a Thai financial document and returns the
+    transcribed text (via PyMuPDF for text PDFs, Groq vision for images/scans).
+    The frontend drops this into the input box for advisor review before analysis.
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 8 MB).")
+    try:
+        # Extraction is blocking (PDF parse + LLM call) -> run off the event loop.
+        text, method = await run_in_threadpool(extract_text_from_file, file.filename, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read the file: {str(e)}")
+
+    if not text or not text.strip():
+        raise HTTPException(status_code=422, detail="No readable financial text found in the file.")
+
+    return {"extracted_text": text, "source": file.filename, "method": method}
+
 
 @app.post("/api/v1/analyze", response_model=AdvisoryWorkflowResponse)
 async def analyze_profile(request: AdvisoryWorkflowRequest):
