@@ -41,13 +41,44 @@ const PRESETS = [
   }
 ];
 
+// Profile fields tracked for completeness + optional supplemental input.
+// `penalty` is the confidence cost (%) charged when the field is missing.
+const PROFILE_FIELDS: { key: string; label: string; penalty: number; placeholder: string; type: string }[] = [
+  { key: "monthly_income", label: "Monthly Income (THB)", penalty: 10, placeholder: "e.g. 150000", type: "number" },
+  { key: "age", label: "Age", penalty: 5, placeholder: "e.g. 35", type: "number" },
+  { key: "risk_profile", label: "Risk Preference", penalty: 5, placeholder: "Conservative / Moderate / Aggressive", type: "text" },
+  { key: "employment_type", label: "Employment Type", penalty: 5, placeholder: "salary / freelance", type: "text" },
+  { key: "goal", label: "Financial Goal", penalty: 4, placeholder: "e.g. tax optimization", type: "text" },
+  { key: "ssf", label: "SSF Investment (THB/year)", penalty: 3, placeholder: "e.g. 60000", type: "number" },
+  { key: "rmf", label: "RMF Investment (THB/year)", penalty: 3, placeholder: "e.g. 30000", type: "number" },
+  { key: "life_insurance", label: "Life Insurance (THB/year)", penalty: 3, placeholder: "e.g. 25000", type: "number" },
+];
+
+// Display helper: never surface null / undefined / NaN / empty — show a dash.
+const dash = (v: any): string => {
+  if (v === null || v === undefined) return "-";
+  if (typeof v === "number" && Number.isNaN(v)) return "-";
+  if (typeof v === "string" && v.trim() === "") return "-";
+  return String(v);
+};
+
+// Tracked profile fields the client did NOT provide (from extracted entities).
+function getMissingFields(result: any) {
+  const ent = result?.typhoon_result?.entities || {};
+  return PROFILE_FIELDS.filter((f) => {
+    if (f.key === "monthly_income") return ent.monthly_income == null && ent.annual_income == null;
+    return ent[f.key] === null || ent[f.key] === undefined;
+  });
+}
+
 // Uncertainty-Quantification (UQ) audit: a transparent confidence score for the
 // whole advisory run, derived from signals the pipeline already produced.
 function computeAudit(result: any) {
   const t = result?.typhoon_result;
   const conf = Math.round((t?.confidence ?? 0) * 100);
-  const missing = t?.missing_information?.length ?? 0;
-  const completeness = Math.max(0, 100 - missing * 12);
+  const missingFields = getMissingFields(result);
+  const penaltySum = missingFields.reduce((s, f) => s + f.penalty, 0);
+  const completeness = Math.max(0, 100 - penaltySum);
   const comp = result?.compliance;
   const complianceScore = comp
     ? (comp.status === "approved" ? 100 : Math.max(30, 100 - (comp.violations?.length ?? 0) * 30))
@@ -56,12 +87,12 @@ function computeAudit(result: any) {
   const fit = funds > 0 ? 100 : 50;
   const factors = [
     { label: "NLP Extraction Confidence", value: conf, weight: 0.30, note: "Typhoon interpreter certainty" },
-    { label: "Profile Completeness", value: completeness, weight: 0.30, note: missing ? `${missing} field(s) missing` : "All key fields present" },
+    { label: "Profile Completeness", value: completeness, weight: 0.30, note: missingFields.length ? `${missingFields.length} field(s) missing` : "All key fields present" },
     { label: "Compliance Integrity", value: complianceScore, weight: 0.25, note: comp ? (comp.status === "approved" ? "No violations" : `${comp.violations?.length ?? 0} violation(s)`) : "Pending advisor approval" },
     { label: "Recommendation Coverage", value: fit, weight: 0.15, note: funds ? `${funds} fund(s) matched` : "No funds matched" },
   ];
   const score = Math.round(factors.reduce((s, f) => s + f.value * f.weight, 0));
-  return { score, factors };
+  return { score, factors, missingFields, completeness };
 }
 
 // Explainable-AI decision timeline: maps the structured run into transparent
@@ -76,6 +107,7 @@ function buildDecisionTimeline(result: any, auditScore: number | null) {
   const funds = result?.recommendation?.recommended_funds || [];
   const comp = result?.compliance;
   const b = (n: any) => "฿" + new Intl.NumberFormat("en-US").format(Math.round(n || 0));
+  const missingFields = getMissingFields(result);
 
   return [
     {
@@ -85,10 +117,14 @@ function buildDecisionTimeline(result: any, auditScore: number | null) {
         c ? `Existing benefits: RMF ${b(c.existing_rmf)}, SSF ${b(c.existing_ssf)}, insurance ${b(c.life_insurance)}` : "Existing tax benefits",
         `Risk preference: ${c?.risk_profile ?? "—"}`,
         t ? `NLP confidence: ${(t.confidence * 100).toFixed(0)}%` : null,
+        ...missingFields.slice(0, 4).map((f) => `${f.label.replace(/ \(.*\)/, "")}: -`),
       ].filter(Boolean) as string[],
       conclusion: [
         `${c?.risk_profile ?? "Moderate"}-risk investor`,
         `Objective: ${c?.goal ?? "Tax optimization"}`,
+        ...(missingFields.length
+          ? ["Some profile parameters are missing", "Confidence reduced due to incomplete profile"]
+          : []),
       ],
     },
     {
@@ -154,6 +190,8 @@ export default function Dashboard() {
   const [result, setResult] = useState<any>(null);
   // Raw execution log toggle (under the decision timeline)
   const [rawLogOpen, setRawLogOpen] = useState(false);
+  // Optional supplemental values the user types for missing profile fields
+  const [optionalInputs, setOptionalInputs] = useState<Record<string, string>>({});
 
   // File upload state
   const [fileLoading, setFileLoading] = useState(false);
@@ -187,7 +225,8 @@ export default function Dashboard() {
     }
   };
 
-  const handleRunWorkflow = async () => {
+  const handleRunWorkflow = async (textOverride?: string) => {
+    const inputForRun = typeof textOverride === "string" ? textOverride : inputText;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -200,7 +239,7 @@ export default function Dashboard() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ raw_input_text: inputText })
+        body: JSON.stringify({ raw_input_text: inputForRun })
       });
 
       if (!response.ok) {
@@ -244,6 +283,23 @@ export default function Dashboard() {
       setLoading(false);
       setStatusText("");
     }
+  };
+
+  // Append any optional profile values the advisor filled in, then re-run the
+  // analysis (a fresh session) so the supplemental data is incorporated.
+  const applyOptionalInfo = () => {
+    if (!result) return;
+    const parts = getMissingFields(result)
+      .map((f) => {
+        const v = optionalInputs[f.key];
+        return v && v.trim() ? `${f.label.replace(/ \(.*\)/, "")}: ${v.trim()}` : null;
+      })
+      .filter(Boolean) as string[];
+    if (!parts.length) return;
+    const augmented = `${inputText}\n\n[Additional details provided by advisor] ${parts.join("; ")}`;
+    setInputText(augmented);
+    setOptionalInputs({});
+    handleRunWorkflow(augmented);
   };
 
   // Helper to format currency
@@ -362,7 +418,7 @@ export default function Dashboard() {
 
               {/* Trigger Button */}
               <button
-                onClick={handleRunWorkflow}
+                onClick={() => handleRunWorkflow()}
                 disabled={loading}
                 className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 mt-2 shadow-lg shadow-indigo-600/20"
               >
@@ -489,30 +545,85 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* 1. Client Info Summary */}
+                {/* 1. Client Info Summary (shows what the client actually provided; "-" if not) */}
                 <div className="glass-panel p-6 border-white/5 grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Client Age</span>
-                    <span className="text-lg font-semibold text-slate-200">{result.client_data?.age ?? "N/A"} Years Old</span>
+                    <span className="text-lg font-semibold text-slate-200">
+                      {result.typhoon_result?.entities?.age != null ? `${result.typhoon_result.entities.age} Years Old` : "-"}
+                    </span>
                   </div>
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Assessable Income</span>
                     <span className="text-lg font-semibold text-slate-200">
-                      {result.client_data 
+                      {(result.typhoon_result?.entities?.monthly_income != null || result.typhoon_result?.entities?.annual_income != null) && result.client_data
                         ? formatTHB((result.client_data.monthly_income * 12) + (result.client_data.monthly_income * result.client_data.bonus_months))
-                        : "N/A"
+                        : "-"
                       }
                     </span>
                   </div>
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Risk Profile</span>
-                    <span className="text-lg font-semibold text-indigo-400">{result.client_data?.risk_profile ?? "N/A"}</span>
+                    <span className="text-lg font-semibold text-indigo-400">{dash(result.typhoon_result?.entities?.risk_profile)}</span>
                   </div>
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Financial Goal</span>
-                    <span className="text-lg font-semibold text-emerald-400">{result.client_data?.goal ?? "N/A"}</span>
+                    <span className="text-lg font-semibold text-emerald-400">{dash(result.typhoon_result?.entities?.goal)}</span>
                   </div>
                 </div>
+
+                {/* 1a. Missing Profile Information (optional, non-blocking) */}
+                {audit && audit.missingFields.length > 0 && (
+                  <div className="glass-panel p-6 border border-amber-500/20 bg-amber-500/[0.03] flex flex-col gap-4">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-amber-300">Missing Profile Information (Optional)</h3>
+                        <p className="text-xs text-slate-400 mt-1">
+                          The following information was not provided. Adding these details may improve recommendation quality and confidence scores.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {audit.missingFields.map((f) => (
+                        <span key={f.key} className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-md text-xs text-amber-300 flex items-center gap-1.5">
+                          <span className="text-amber-500/70">•</span>{f.label.replace(/ \(.*\)/, "")}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {audit.missingFields.map((f) => (
+                        <div key={f.key} className="flex flex-col gap-1">
+                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{f.label}</label>
+                          <input
+                            type={f.type}
+                            value={optionalInputs[f.key] ?? ""}
+                            onChange={(e) => setOptionalInputs({ ...optionalInputs, [f.key]: e.target.value })}
+                            placeholder={f.placeholder}
+                            className="w-full px-3 py-2 bg-slate-950/70 border border-white/10 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-amber-500/50 transition-colors"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-amber-500/10 pt-3">
+                      <p className="text-[11px] text-slate-400 flex items-start gap-1.5">
+                        <Info className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        Providing additional profile information may improve recommendation accuracy and reduce uncertainty. All fields are optional.
+                      </p>
+                      <button
+                        onClick={applyOptionalInfo}
+                        disabled={loading}
+                        className="shrink-0 px-4 py-2 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg disabled:opacity-50 flex items-center justify-center gap-1.5"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                        Apply &amp; re-analyze
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* 1b. Audit Summary — clickable Compliance + UQ cards */}
                 {audit && (
@@ -599,6 +710,26 @@ export default function Dashboard() {
                             <span className="text-[10px] text-slate-500">{f.note}</span>
                           </div>
                         ))}
+
+                        {/* Confidence deductions from missing profile data */}
+                        {audit.missingFields.length > 0 && (
+                          <div className="mt-1 border-t border-white/5 pt-3 flex flex-col gap-1.5">
+                            <p className="text-[10px] uppercase font-bold text-amber-400/80 tracking-wider">Profile Completeness — deductions</p>
+                            <div className="flex items-center justify-between text-xs text-slate-400">
+                              <span>Starting confidence</span><span className="font-mono">100%</span>
+                            </div>
+                            {audit.missingFields.map((f) => (
+                              <div key={f.key} className="flex items-center justify-between text-xs">
+                                <span className="text-slate-400">Missing {f.label.replace(/ \(.*\)/, "")}</span>
+                                <span className="font-mono text-amber-400">−{f.penalty}%</span>
+                              </div>
+                            ))}
+                            <div className="flex items-center justify-between text-xs font-semibold border-t border-white/5 pt-1.5 mt-0.5">
+                              <span className="text-slate-300">Profile completeness</span>
+                              <span className="font-mono text-slate-200">{audit.completeness}%</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
