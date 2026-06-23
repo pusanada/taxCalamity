@@ -1,140 +1,81 @@
-<![CDATA[<div align="center">
+# TaxCalamity
 
-# 🏦 TaxCalamity
+**Production-Grade Wealth Advisory & Tax Optimization Platform for Thailand**
 
-### Production-Grade Wealth Advisory & Tax Optimization Platform for Thailand
+A multi-agent AI system built for Thai wealth advisors and fund managers.  
+Combines natural language processing, deterministic tax calculations, fund recommendation, and SEC compliance auditing in a single workflow.
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)](https://nextjs.org)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Workflow-FF6F00?style=for-the-badge)](https://github.com/langchain-ai/langgraph)
-[![CrewAI](https://img.shields.io/badge/CrewAI-Multi--Agent-8B5CF6?style=for-the-badge)](https://crewai.com)
+> **Core Design Principle**:  
+> AI does NOT calculate taxes. All tax computations are deterministic Python functions.  
+> AI can only extract, explain, recommend, and validate — never invent financial rules.
 
 ---
 
-**AI-powered multi-agent system** for Thai wealth advisors that combines  
-**Typhoon NLP** · **Deterministic Tax Engine** · **Human-in-the-Loop Review** · **SEC Compliance Audit**
+## Tech Stack
 
-> ⚠️ **Design Principle**: AI does NOT calculate taxes. All tax computations are deterministic Python services.  
-> AI can only **extract**, **explain**, **recommend**, and **validate** — never **invent** financial rules.
-
-</div>
-
----
-
-## 📋 Table of Contents
-
-- [Architecture](#-architecture)
-- [9-Agent System](#-9-agent-system)
-- [Tech Stack](#-tech-stack)
-- [Getting Started](#-getting-started)
-- [API Reference](#-api-reference)
-- [Tax Engine](#-deterministic-tax-engine)
-- [Project Structure](#-project-structure)
-- [Design Decisions](#-design-decisions)
-- [License](#-license)
+**Backend:** FastAPI, LangGraph, CrewAI, SQLAlchemy, Pydantic v2, Groq API  
+**Frontend:** Next.js 15, React 19, TailwindCSS, ReactFlow, Recharts  
+**LLM:** Qwen 3 32B (via Groq) for reasoning, Typhoon v2 70B for Thai NLP  
+**Infrastructure:** PostgreSQL, Redis, Qdrant (all via Docker Compose)
 
 ---
 
-## 🏗 Architecture
+## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        FRONTEND (Next.js 15)                        │
-│  React 19 · TailwindCSS · ReactFlow · Recharts · Lucide Icons      │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │ REST API
-┌────────────────────────────────▼────────────────────────────────────┐
-│                        BACKEND (FastAPI)                            │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                   LangGraph Orchestrator                      │   │
-│  │                                                               │   │
-│  │  Typhoon ─► Intake ─► Suitability ─► Tax Engine ─► Fund Rec  │   │
-│  │                                         │                     │   │
-│  │  Explanation ◄─────────────────────────┘                     │   │
-│  │       │                                                       │   │
-│  │  Human Review (PAUSE) ─► Compliance ─► Report                │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │  Tax Engine   │  │ Fund Catalog │  │  Database (SQLAlchemy)   │  │
-│  │ (Pure Python) │  │  (Seeded)    │  │  SQLite / PostgreSQL     │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+User (Thai text input)
+        |
+        v
++------------------+     +------------------+     +--------------------+
+| Typhoon NLP      | --> | Client Intake    | --> | Suitability        |
+| (Thai language   |     | (Extract age,    |     | (Risk profile,     |
+|  interpreter)    |     |  income, goals)  |     |  horizon, alloc.)  |
++------------------+     +------------------+     +--------------------+
+                                                          |
+                                                          v
++------------------+     +------------------+     +--------------------+
+| Explanation      | <-- | Fund Selection   | <-- | Tax Engine         |
+| (Why / Benefit / |     | (SSF, RMF,       |     | (Progressive       |
+|  Risk for each)  |     |  ThaiESG match)  |     |  bracket calc.)    |
++------------------+     +------------------+     +--------------------+
+        |
+        v
++------------------+     +------------------+     +--------------------+
+| Human Review     | --> | SEC Compliance   | --> | Report Generator   |
+| (Advisor must    |     | (Violation check,|     | (Final output +    |
+|  approve first)  |     |  risk mismatch)  |     |  audit trail)      |
++------------------+     +------------------+     +--------------------+
 ```
+
+The workflow **pauses at Human Review**. The advisor must explicitly approve the recommendation before compliance and report generation runs.
 
 ---
 
-## 🤖 9-Agent System
+## 9-Agent System
 
-| # | Agent | Model | Role |
-|---|-------|-------|------|
-| 1 | **Typhoon Interpreter** | `typhoon-v2-70b-instruct` | Pre-process Thai financial conversations → structured JSON |
-| 2 | **Client Intake** | `qwen3-32b` (Groq) | Extract demographics & financial figures from normalized text |
-| 3 | **Suitability Analyst** | `qwen3-32b` (Groq) | Evaluate risk profile, investment horizon, asset allocation |
-| 4 | **Tax Engine** | *Pure Python* | Deterministic Thai PIT calculation with progressive brackets |
-| 5 | **Fund Recommender** | *Catalog Lookup* | Match SSF/RMF/ThaiESG funds to capacity & risk profile |
-| 6 | **Explainability** | `qwen3-32b` (Groq) | Generate Why/Benefit/Risk/Assumptions per fund |
-| 7 | **Human Review** | *Checkpoint* | Pause workflow for Wealth Advisor approval |
-| 8 | **Compliance Auditor** | `qwen3-32b` (Groq) | SEC violation checks: return guarantees, risk mismatches |
-| 9 | **Report Generator** | *Deterministic* | Render final advisory report & persist audit trail |
-
-### Workflow Pipeline
-
-```
-Thai Input ──► Typhoon NLP ──► Client Intake ──► Suitability
-                                                      │
-                                                      ▼
-Report ◄── Compliance ◄── Human Review ◄── Explanation ◄── Fund Selection ◄── Tax Engine
-```
-
-**Key Feature**: The workflow **pauses at Human Review** using LangGraph's `interrupt_after` mechanism. The advisor must explicitly approve the recommendation before the compliance audit runs.
+| Agent | Model | What It Does |
+|-------|-------|-------------|
+| **Typhoon Interpreter** | Typhoon v2 70B | Converts informal Thai financial text into structured JSON |
+| **Client Intake** | Qwen 3 32B (Groq) | Extracts demographics and financial figures from normalized text |
+| **Suitability Analyst** | Qwen 3 32B (Groq) | Determines risk profile, investment horizon, and asset allocation |
+| **Tax Engine** | Pure Python | Calculates Thai personal income tax using progressive brackets |
+| **Fund Recommender** | Catalog Lookup | Matches SSF/RMF/ThaiESG funds to available capacity and risk |
+| **Explainability** | Qwen 3 32B (Groq) | Generates Why, Benefit, Risk, and Assumptions for each fund |
+| **Human Review** | Checkpoint | Pauses the workflow for licensed advisor approval |
+| **Compliance Auditor** | Qwen 3 32B (Groq) | Checks for SEC violations, return guarantees, risk mismatches |
+| **Report Generator** | Deterministic | Renders final advisory report and persists full audit trail |
 
 ---
 
-## 🛠 Tech Stack
-
-### Backend
-| Component | Technology |
-|-----------|-----------|
-| API Framework | FastAPI 0.110+ |
-| Workflow Engine | LangGraph (StateGraph + MemorySaver) |
-| Multi-Agent | CrewAI 0.28+ |
-| LLM Provider | Groq (`qwen/qwen3-32b`) |
-| Thai NLP | Typhoon (`typhoon-v2-70b-instruct`) |
-| Database | SQLAlchemy 2.0 (SQLite dev / PostgreSQL prod) |
-| Validation | Pydantic v2 |
-| Vector DB | Qdrant (optional) |
-
-### Frontend
-| Component | Technology |
-|-----------|-----------|
-| Framework | Next.js 15 |
-| UI Library | React 19 |
-| Styling | TailwindCSS 3.4 |
-| Visualization | ReactFlow, Recharts |
-| Icons | Lucide React |
-
-### Infrastructure
-| Component | Technology |
-|-----------|-----------|
-| Database | PostgreSQL 15 (Docker) |
-| Cache | Redis 7 (Docker) |
-| Vector Store | Qdrant (Docker) |
-
----
-
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
 - Python 3.11+
 - Node.js 18+
-- Docker & Docker Compose (optional, for PostgreSQL/Redis)
+- Docker and Docker Compose (optional, for PostgreSQL/Redis)
 
-### 1. Clone the Repository
+### 1. Clone
 
 ```bash
 git clone https://github.com/pusanada/taxCalamity.git
@@ -147,16 +88,15 @@ git checkout prototype
 Create a `.env` file in the project root:
 
 ```env
-# Application
 APP_NAME=Chief Wealth Intelligence Platform
 VERBOSE=false
 DATABASE_URL=sqlite:///wealth_advisor.db
 
-# Groq API (for Qwen reasoning agents)
+# Groq API (powers Qwen reasoning agents)
 GROQ_API_KEY=gsk_your_groq_api_key_here
 LLM_MODEL=qwen/qwen3-32b
 
-# Typhoon API (for Thai NLP pre-processing)
+# Typhoon API (powers Thai language pre-processing)
 TYPHOON_API_KEY=your_typhoon_api_key_here
 TYPHOON_MODEL=typhoon-v2-70b-instruct
 TYPHOON_API_BASE=https://api.opentyphoon.ai/v1
@@ -166,21 +106,19 @@ POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/wealth_advisor
 REDIS_URL=redis://localhost:6379
 ```
 
-> 💡 **No API keys?** The platform gracefully falls back to deterministic mock responses for all agents, so you can explore the full workflow without any LLM provider.
+**No API keys?** The platform falls back to deterministic mock responses, so you can explore the full workflow without any LLM provider.
 
-### 3. Backend Setup
+### 3. Start Backend
 
 ```bash
-# Install Python dependencies
 pip install -r backend/requirements.txt
-
-# Start the API server
 python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The API will be available at `http://localhost:8000` with Swagger docs at `/docs`.
+API available at: `http://localhost:8000`  
+Swagger docs at: `http://localhost:8000/docs`
 
-### 4. Frontend Setup
+### 4. Start Frontend
 
 ```bash
 cd frontend
@@ -188,48 +126,44 @@ npm install
 npm run dev
 ```
 
-The dashboard will be available at `http://localhost:3000`.
+Dashboard available at: `http://localhost:3000`
 
-### 5. Infrastructure (Optional)
+### 5. Start Infrastructure (Optional)
 
 ```bash
-# Start PostgreSQL, Redis, and Qdrant
 cd backend
 docker-compose up -d
 ```
 
-Then update `DATABASE_URL` in `.env` to:
-```
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/wealth_advisor
-```
+This starts PostgreSQL 15, Redis 7, and Qdrant. Update `DATABASE_URL` in `.env` to the PostgreSQL connection string.
 
 ---
 
-## 📡 API Reference
+## API Reference
 
-### Base URL: `http://localhost:8000`
+Base URL: `http://localhost:8000`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Health check |
-| `POST` | `/api/v1/analyze` | Submit Thai financial text → runs full pipeline up to Human Review |
-| `POST` | `/api/v1/recommend` | Approve & resume workflow → runs Compliance + Report |
-| `GET` | `/api/v1/report/{session_id}` | Retrieve final advisory report |
-| `GET` | `/api/v1/audit/{session_id}` | Full audit trail: agent runs, compliance flags, execution logs |
-| `GET` | `/api/v1/session/{session_id}` | Session state with ReactFlow graph nodes/edges |
+| GET | `/` | Health check |
+| POST | `/api/v1/analyze` | Submit client text, runs pipeline up to Human Review |
+| POST | `/api/v1/recommend` | Approve and resume workflow, runs Compliance + Report |
+| GET | `/api/v1/report/{session_id}` | Get final advisory report |
+| GET | `/api/v1/audit/{session_id}` | Get full audit trail with agent runs and compliance flags |
+| GET | `/api/v1/session/{session_id}` | Get session state with ReactFlow graph data |
 
-### Example: Analyze a Thai Client
+### Example: Submit for Analysis
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/analyze \
   -H "Content-Type: application/json" \
   -d '{
-    "raw_input_text": "ผมอายุ 35 ปี เงินเดือนประมาณแสนห้า โบนัสปีละ 4 เดือน ซื้อ RMF ไว้นิดหน่อย มีประกันชีวิตด้วย อยากลดภาษีเพิ่ม",
+    "raw_input_text": "I am 35 years old, monthly salary around 150k THB, 4 months bonus per year, small RMF investment, have life insurance, want to optimize taxes",
     "session_id": "demo-001"
   }'
 ```
 
-### Example: Approve & Generate Report
+### Example: Approve and Generate Report
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/recommend \
@@ -237,17 +171,17 @@ curl -X POST http://localhost:8000/api/v1/recommend \
   -d '{"session_id": "demo-001"}'
 ```
 
-### Response Structure
+### Response Shape
 
 ```json
 {
   "session_id": "demo-001",
   "typhoon_result": {
     "normalized_thai": "...",
-    "english_translation": "...",
+    "english_translation": "Salary 150,000 THB, 4 months bonus, small RMF, has life insurance, seeking tax optimization",
     "confidence": 0.95,
     "missing_information": [],
-    "entities": { ... }
+    "entities": { "age": 35, "monthly_income": 150000, "bonus_months": 4 }
   },
   "client_data": {
     "age": 35,
@@ -263,7 +197,7 @@ curl -X POST http://localhost:8000/api/v1/recommend \
     "tax_before": 284500.0,
     "tax_after": 134500.0,
     "saving": 150000.0,
-    "detailed_calculations": { ... }
+    "detailed_calculations": { "..." : "..." }
   },
   "recommendation": {
     "recommended_funds": [
@@ -283,143 +217,135 @@ curl -X POST http://localhost:8000/api/v1/recommend \
 
 ---
 
-## 🧮 Deterministic Tax Engine
+## Deterministic Tax Engine
 
-The tax engine is implemented as **pure Python functions** — no AI involvement.
+All tax math is pure Python. No AI involved.
 
 ### Thai Personal Income Tax Brackets
 
 | Taxable Income (THB) | Rate |
 |----------------------|------|
-| 0 – 150,000 | 0% |
-| 150,001 – 300,000 | 5% |
-| 300,001 – 500,000 | 10% |
-| 500,001 – 750,000 | 15% |
-| 750,001 – 1,000,000 | 20% |
-| 1,000,001 – 2,000,000 | 25% |
-| 2,000,001 – 5,000,000 | 30% |
+| 0 - 150,000 | 0% |
+| 150,001 - 300,000 | 5% |
+| 300,001 - 500,000 | 10% |
+| 500,001 - 750,000 | 15% |
+| 750,001 - 1,000,000 | 20% |
+| 1,000,001 - 2,000,000 | 25% |
+| 2,000,001 - 5,000,000 | 30% |
 | 5,000,001+ | 35% |
 
-### Deduction Limits
+### Fund Deduction Limits
 
-| Fund Type | Individual Cap | Joint Retirement Cap |
-|-----------|---------------|---------------------|
-| **SSF** | 30% of income, max ฿200,000 | SSF + RMF ≤ ฿500,000 |
-| **RMF** | 30% of income, max ฿500,000 | SSF + RMF ≤ ฿500,000 |
-| **ThaiESG** | 30% of income, max ฿300,000 | Separate cap |
-| **Life Insurance** | Max ฿100,000 | — |
+| Fund Type | Individual Cap | Joint Cap |
+|-----------|---------------|-----------|
+| SSF | 30% of income, max 200,000 THB | SSF + RMF combined max 500,000 THB |
+| RMF | 30% of income, max 500,000 THB | SSF + RMF combined max 500,000 THB |
+| ThaiESG | 30% of income, max 300,000 THB | Separate cap (not in 500k pool) |
+| Life Insurance | Max 100,000 THB | N/A |
 
-### Key Functions
+### Core Functions
 
 ```python
-calculate_tax(taxable_income)              # Progressive bracket calculation
-calculate_ssf_limit(income)                # SSF cap: min(30%, 200k)
-calculate_rmf_limit(income)                # RMF cap: min(30%, 500k)
-calculate_remaining_deduction_capacity()   # Joint cap-aware optimizer
-calculate_tax_savings()                    # Before vs. after comparison
+calculate_tax(taxable_income)                # Progressive bracket calculation
+calculate_ssf_limit(income)                  # SSF cap: min(30% of income, 200k)
+calculate_rmf_limit(income)                  # RMF cap: min(30% of income, 500k)
+calculate_remaining_deduction_capacity(...)  # Joint cap-aware capacity optimizer
+calculate_tax_savings(...)                   # Before vs after tax comparison
 ```
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 taxCalamity/
 ├── backend/
 │   ├── app/
 │   │   ├── agents/
-│   │   │   └── agents.py          # 9 CrewAI agent definitions & crew runners
+│   │   │   └── agents.py           # 9 CrewAI agent definitions and crew runners
 │   │   ├── db/
-│   │   │   ├── database.py        # SQLAlchemy engine, session, init
-│   │   │   └── models.py          # Client, Profile, Recommendation, Audit, etc.
+│   │   │   ├── database.py         # SQLAlchemy engine, session factory, init
+│   │   │   └── models.py           # Client, Profile, Recommendation, Audit models
 │   │   ├── graph/
-│   │   │   └── workflow.py        # LangGraph StateGraph with 9 nodes
+│   │   │   └── workflow.py         # LangGraph StateGraph with 9 nodes + routing
 │   │   ├── schemas/
-│   │   │   └── schemas.py         # Pydantic v2 request/response models
+│   │   │   └── schemas.py          # Pydantic v2 request/response schemas
 │   │   ├── services/
-│   │   │   ├── tax_engine.py      # Deterministic Thai PIT calculator
-│   │   │   ├── tax_service.py     # Tax service utilities
-│   │   │   ├── fund_catalog.py    # Fund seeder & recommendation engine
-│   │   │   └── fund_service.py    # Fund lookup services
-│   │   ├── config.py              # Pydantic Settings from .env
-│   │   └── main.py                # FastAPI app with 6 endpoints
+│   │   │   ├── tax_engine.py       # Deterministic Thai PIT calculator
+│   │   │   ├── tax_service.py      # Tax service utilities
+│   │   │   ├── fund_catalog.py     # Fund seeder and recommendation engine
+│   │   │   └── fund_service.py     # Fund lookup services
+│   │   ├── config.py               # Pydantic Settings loaded from .env
+│   │   └── main.py                 # FastAPI app with 6 API endpoints
 │   ├── tests/
-│   │   ├── test_api.py            # Automated API test suite
-│   │   ├── test_advisory.py       # Advisory flow tests
-│   │   └── run_e2e_flow.py        # End-to-end flow runner
-│   ├── docker-compose.yml         # PostgreSQL + Redis + Qdrant
-│   └── requirements.txt           # Python dependencies
+│   │   ├── test_api.py             # Automated API test suite
+│   │   ├── test_advisory.py        # Advisory flow tests
+│   │   └── run_e2e_flow.py         # End-to-end flow runner script
+│   ├── docker-compose.yml          # PostgreSQL + Redis + Qdrant containers
+│   └── requirements.txt            # Python dependencies
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx               # Main dashboard with ReactFlow
-│   │   ├── layout.tsx             # Root layout with metadata
-│   │   └── globals.css            # TailwindCSS + custom styles
-│   ├── package.json               # Next.js 15 + React 19
-│   ├── tailwind.config.js
-│   ├── postcss.config.js
-│   └── tsconfig.json
-├── .env                           # Environment variables (git-ignored)
+│   │   ├── page.tsx                # Main dashboard with ReactFlow workflow graph
+│   │   ├── layout.tsx              # Root layout with metadata and fonts
+│   │   └── globals.css             # TailwindCSS base + custom styles
+│   ├── package.json                # Next.js 15 + React 19 dependencies
+│   ├── tailwind.config.js          # Tailwind configuration
+│   ├── postcss.config.js           # PostCSS configuration
+│   └── tsconfig.json               # TypeScript configuration
+├── .env                            # Environment variables (git-ignored)
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## 🎯 Design Decisions
+## Design Decisions
 
 ### Why AI Cannot Calculate Taxes
 
-Thai tax law is complex but **deterministic**. Using LLMs for tax calculations introduces:
-- **Hallucination risk** — LLMs may invent tax brackets or limits
-- **Non-reproducibility** — Same input may produce different outputs
+Thai tax law is complex but deterministic. LLMs introduce:
+- **Hallucination risk** — LLMs may invent tax brackets or limits that don't exist
+- **Non-reproducibility** — Same input may produce different tax amounts on each run
 - **Audit failure** — Regulators require deterministic, verifiable calculations
 
-**Our approach**: AI handles extraction and explanation; Python functions handle math.
+Our approach: AI handles language extraction and explanation. Python functions handle all math.
 
-### Why Typhoon + Qwen (Dual-LLM)
+### Why Two LLMs (Typhoon + Qwen)
 
-| Concern | Solution |
-|---------|----------|
-| Thai financial slang ("แสนห้า", "โบนัสสามสี่เดือน") | Typhoon — trained on Thai corpus |
-| Structured reasoning, compliance logic | Qwen 3 32B via Groq — fast, accurate |
-| Cost optimization | Typhoon runs once (intake), Qwen runs for reasoning |
+- **Typhoon** is trained on Thai text and understands informal financial slang
+- **Qwen 3 32B** (via Groq) is fast and accurate for structured reasoning tasks
+- Typhoon runs once at intake, Qwen runs for all reasoning steps — cost-efficient split
 
 ### Why Human-in-the-Loop
 
-Fund recommendations must be **reviewed by a licensed advisor** before compliance. The LangGraph workflow uses `interrupt_after=["human_review"]` to enforce this checkpoint.
+Fund recommendations must be reviewed by a licensed advisor before compliance audit runs. The LangGraph workflow uses `interrupt_after=["human_review"]` to enforce this mandatory checkpoint.
 
-### Why LangGraph over Plain CrewAI
+### Why LangGraph Instead of Plain CrewAI
 
-- **State persistence** — Each node saves state to DB; sessions can be resumed
-- **Conditional routing** — Failed nodes route to `END`, low-confidence inputs route to human review
-- **Checkpointing** — `MemorySaver` enables pause/resume across HTTP requests
+- **State persistence** — Each node saves state to the database, sessions can be resumed later
+- **Conditional routing** — Failed nodes route to END, low-confidence inputs route to human review
+- **Checkpointing** — MemorySaver enables pause/resume across separate HTTP requests
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Run API tests
 cd backend
 python -m pytest tests/test_api.py -v
 
-# Run E2E flow
+# Run end-to-end flow
 python -m backend.tests.run_e2e_flow
 ```
 
 ---
 
-## 📄 License
+## License
 
 This project is for educational and demonstration purposes.
 
 ---
 
-<div align="center">
-
-**Built with ❤️ for Thai Financial Advisors**
-
-*Deterministic calculations. Intelligent explanations. Human oversight.*
-
-</div>
-]]>
+Built for Thai Financial Advisors.  
+Deterministic calculations. Intelligent explanations. Human oversight.
