@@ -82,8 +82,14 @@ def _chat_json(
     user: str,
     use_json_mode: bool = True,
     temperature: float = 0.2,
+    retries: int = 1,
 ) -> dict:
-    """Call an OpenAI-compatible chat endpoint and return parsed JSON."""
+    """Call an OpenAI-compatible chat endpoint and return parsed JSON.
+
+    Retries once on transient errors (network blips, rate limits, malformed
+    JSON) so a single hiccup doesn't fail the whole request now that mock
+    fallback is off in production.
+    """
     kwargs: dict = {
         "model": model,
         "temperature": temperature,
@@ -94,8 +100,14 @@ def _chat_json(
     }
     if use_json_mode:
         kwargs["response_format"] = {"type": "json_object"}
-    resp = client.chat.completions.create(**kwargs)
-    return _extract_json(resp.choices[0].message.content)
+    last_err = None
+    for _ in range(retries + 1):
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            return _extract_json(resp.choices[0].message.content)
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 def _groq_json(system: str, user: str, **kw) -> dict:
@@ -123,10 +135,21 @@ def _maybe_mock(factory):
 # ============================================================================
 
 _INTERPRETER_SYSTEM = (
-    "You are a Thai financial language interpreter. You understand informal Thai "
-    "financial slang (e.g. 'แสนห้า' = 150000, 'โบนัส 3-4 เดือน' = 3.5 months). "
-    "Convert raw Thai client text into structured financial data. Never invent "
-    "numbers; use null when a value is not stated. "
+    "You are a Thai financial language interpreter. You are an expert at informal "
+    "Thai financial slang and Thai number words. Convert raw Thai client text into "
+    "structured financial data. Never invent numbers; use null when a value is not "
+    "stated.\n\n"
+    "Thai number glossary (memorize and apply):\n"
+    "- หมื่น = 10,000 ; สามหมื่น = 30,000 ; ห้าหมื่น = 50,000\n"
+    "- แสน = 100,000 ; แสนห้า / แสนห้าหมื่น = 150,000 ; แสนสอง = 120,000\n"
+    "- สองแสน = 200,000 ; ครึ่งล้าน = 500,000 ; ล้าน = 1,000,000\n"
+    "- 'โบนัส 3-4 เดือน' = 3.5 months ; 'โบนัสปีละ 4 เดือน' = bonus_months 4\n\n"
+    "Examples:\n"
+    "- 'เงินเดือนประมาณแสนห้า' -> monthly_income 150000\n"
+    "- 'รายได้ 120,000 ต่อเดือน' -> monthly_income 120000\n"
+    "- 'ซื้อ RMF บ้างนิดหน่อย' -> rmf is small/unspecified, use null (not 0)\n\n"
+    "If clear income and intent are present, confidence should be >= 0.85. Only use "
+    "low confidence (< 0.80) when income or the core request is genuinely unclear.\n"
     "Respond with ONLY a valid JSON object, no markdown, no explanation. /no_think"
 )
 
@@ -178,7 +201,7 @@ def run_typhoon_interpreter_crew(raw_input_text: str) -> TyphoonOutputSchema:
         try:
             data = _chat_json(
                 typhoon_client, settings.TYPHOON_MODEL,
-                _INTERPRETER_SYSTEM, user_prompt, use_json_mode=False,
+                _INTERPRETER_SYSTEM, user_prompt, use_json_mode=False, temperature=0.0,
             )
             return _coerce_typhoon(data)
         except Exception as e:
@@ -187,7 +210,7 @@ def run_typhoon_interpreter_crew(raw_input_text: str) -> TyphoonOutputSchema:
     # 2) Fallback: Groq (Qwen3 is multilingual and handles Thai well).
     if groq_client:
         try:
-            data = _groq_json(_INTERPRETER_SYSTEM, user_prompt)
+            data = _groq_json(_INTERPRETER_SYSTEM, user_prompt, temperature=0.0)
             return _coerce_typhoon(data)
         except Exception as e:
             _log(f"[Typhoon] Groq fallback failed: {e}")
