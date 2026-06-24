@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useState } from 'react';
-import { 
-  User, 
-  TrendingUp, 
+import {
+  TrendingUp,
   ShieldCheck, 
   ShieldAlert, 
   CheckCircle, 
@@ -254,38 +253,24 @@ export default function Dashboard() {
       }
 
       const data = await response.json();
-      setResult(data);
+
+      // Auto-continue through the SEC compliance audit so the result lands
+      // directly on the post-audit state (no manual approval checkpoint).
+      let finalData = data;
+      if (data?.status === "awaiting_review" && data?.session_id) {
+        setStatusText("Running SEC compliance audit...");
+        const rec = await fetch(`${API_URL}/api/v1/recommend`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: data.session_id }),
+        });
+        if (rec.ok) {
+          finalData = await rec.json();
+        }
+      }
+      setResult(finalData);
     } catch (err: any) {
       setError(err.message || "Failed to connect to backend server. Make sure FastAPI is running on port 8000.");
-    } finally {
-      setLoading(false);
-      setStatusText("");
-    }
-  };
-
-  const handleApprove = async () => {
-    if (!result || !result.session_id) return;
-    setLoading(true);
-    setError(null);
-    setStatusText("Resuming workflow and running compliance checks...");
-    
-    try {
-      const response = await fetch(`${API_URL}/api/v1/recommend`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ session_id: result.session_id })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
-
-      const data = await response.json();
-      setResult(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to approve recommendation.");
     } finally {
       setLoading(false);
       setStatusText("");
@@ -569,42 +554,6 @@ export default function Dashboard() {
             {result && (
               <div className="flex flex-col gap-6">
                 
-                {/* Advisor Action Banner (Human in the Loop Checkpoint) */}
-                {result.status === "awaiting_review" && (
-                  <div className="p-6 bg-indigo-950/40 border border-indigo-500/30 rounded-xl glow-indigo flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className="p-2.5 bg-indigo-500/20 text-indigo-300 rounded-lg shrink-0 mt-0.5">
-                        <User className="h-5 w-5 animate-pulse" />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold text-base text-indigo-200">Advisor Action Required</h3>
-                        <p className="text-xs text-slate-300 mt-1 max-w-xl">
-                          The 9-agent workflow has paused at the Human Review checkpoint. Please review the Typhoon interpretation, tax calculations, and proposed recommendations below. Click Approve to finalize compliance audits.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 w-full md:w-auto">
-                      <button
-                        onClick={handleApprove}
-                        disabled={loading}
-                        className="flex-1 md:flex-initial px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-1.5"
-                      >
-                        {loading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                        Approve & Submit Compliance
-                      </button>
-                      <button
-                        onClick={() => {
-                          setResult(null);
-                          setError(null);
-                        }}
-                        className="flex-1 md:flex-initial px-4 py-2.5 bg-slate-900/60 hover:bg-slate-800/40 border border-white/5 text-slate-300 text-xs font-semibold rounded-lg"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  </div>
-                )}
-
                 {/* Post-approval confirmation (appears after the compliance audit) */}
                 {result.compliance && result.status !== "awaiting_review" && (
                   result.compliance.status === "approved" ? (
