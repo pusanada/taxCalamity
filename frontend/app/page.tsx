@@ -16,7 +16,9 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   ChevronDown,
-  Gauge
+  Gauge,
+  Send,
+  Pencil
 } from 'lucide-react';
 // Backend base URL. Set NEXT_PUBLIC_API_URL in the deployment environment
 // (e.g. the Render backend URL); falls back to localhost for local dev.
@@ -192,6 +194,8 @@ export default function Dashboard() {
   const [rawLogOpen, setRawLogOpen] = useState(false);
   // Optional supplemental values the user types for missing profile fields
   const [optionalInputs, setOptionalInputs] = useState<Record<string, string>>({});
+  // Whether the advisor has generated the client proposal
+  const [proposalDone, setProposalDone] = useState(false);
 
   // File upload state
   const [fileLoading, setFileLoading] = useState(false);
@@ -307,6 +311,55 @@ export default function Dashboard() {
     setOptionalInputs({});
     // Re-run a fresh analysis with the values treated as ground truth (no LLM re-extraction).
     handleRunWorkflow(undefined, overrides);
+  };
+
+  // Generate a client proposal as a downloadable file. Does NOT send anything
+  // externally — sending stays a deliberate advisor action.
+  const handleGenerateProposal = () => {
+    if (!result) return;
+    const f = (n: any) => "THB " + new Intl.NumberFormat("en-US").format(Math.round(n || 0));
+    const c = result.client_data || {};
+    const tax = result.tax_result || {};
+    const funds = result.recommendation?.recommended_funds || [];
+    const lines = [
+      "WEALTH ADVISORY PROPOSAL",
+      "Session: " + result.session_id,
+      "Generated: " + new Date().toLocaleString(),
+      "",
+      "CLIENT PROFILE",
+      "  Age: " + (result.typhoon_result?.entities?.age ?? "-"),
+      "  Risk profile: " + (c.risk_profile ?? "-"),
+      "  Goal: " + (c.goal ?? "-"),
+      "",
+      "TAX OPTIMIZATION",
+      "  Tax before: " + f(tax.tax_before),
+      "  Tax after:  " + f(tax.tax_after),
+      "  Tax saved:  " + f(tax.saving),
+      "",
+      "RECOMMENDED PORTFOLIO",
+      ...funds.map((x: any) => `  - ${x.fund_code} (${x.fund_type}) ${f(x.amount_thb)} | risk ${x.risk_level}`),
+      "",
+      "COMPLIANCE: " + (result.compliance?.status === "approved" ? "APPROVED" : (result.compliance?.status ?? "pending")),
+      "",
+      "Disclaimer: Mutual fund investments involve risk. Returns are not guaranteed.",
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `proposal-${result.session_id}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setProposalDone(true);
+  };
+
+  // Return to the intake form to revise (input text is preserved).
+  const handleEditRecommendation = () => {
+    setResult(null);
+    setError(null);
+    setProposalDone(false);
   };
 
   // Helper to format currency
@@ -550,6 +603,67 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </div>
+                )}
+
+                {/* Post-approval confirmation (appears after the compliance audit) */}
+                {result.compliance && result.status !== "awaiting_review" && (
+                  result.compliance.status === "approved" ? (
+                    <div className="p-6 bg-slate-900/40 border border-emerald-500/25 rounded-xl flex flex-col gap-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold text-base text-slate-100">Compliance approved</h3>
+                          <p className="text-xs text-slate-400 mt-1 max-w-md">
+                            Audit confirmed. The advisor has signed off on this recommendation.
+                          </p>
+                        </div>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 shrink-0">
+                          <CheckCircle className="h-3.5 w-3.5" /> Approved
+                        </span>
+                      </div>
+                      <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
+                        <button
+                          onClick={handleEditRecommendation}
+                          className="px-4 py-2.5 bg-slate-800/60 hover:bg-slate-700/60 border border-white/10 text-slate-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit recommendation
+                        </button>
+                        <button
+                          onClick={handleGenerateProposal}
+                          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-1.5"
+                        >
+                          {proposalDone ? <CheckCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                          {proposalDone ? "Proposal generated" : "Generate & send client proposal"}
+                        </button>
+                      </div>
+                      {proposalDone && (
+                        <p className="text-[11px] text-emerald-400/90 sm:text-right">
+                          Proposal downloaded — ready for the advisor to send to the client.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-6 bg-slate-900/40 border border-red-500/25 rounded-xl flex flex-col gap-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold text-base text-slate-100">Compliance rejected</h3>
+                          <p className="text-xs text-slate-400 mt-1 max-w-md">
+                            The audit flagged {result.compliance.violations?.length ?? 0} issue(s). Revise the recommendation before proceeding.
+                          </p>
+                        </div>
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/25 shrink-0">
+                          <ShieldAlert className="h-3.5 w-3.5" /> Rejected
+                        </span>
+                      </div>
+                      <div className="flex sm:justify-end">
+                        <button
+                          onClick={handleEditRecommendation}
+                          className="px-4 py-2.5 bg-slate-800/60 hover:bg-slate-700/60 border border-white/10 text-slate-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit recommendation
+                        </button>
+                      </div>
+                    </div>
+                  )
                 )}
 
                 {/* 1. Client Info Summary (shows what the client actually provided; "-" if not) */}
