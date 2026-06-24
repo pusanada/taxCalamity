@@ -26,7 +26,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const PRESETS = [
   {
     name: "Client A (Salary, Compliant)",
-    text: `เงินเดือนประมาณแสนห้า\nโบนัสปีละ 4 เดือน\nซื้อ RMF บ้างนิดหน่อย\nมีประกันชีวิตอยู่แล้ว\nอยากลดภาษีเพิ่ม\nความเสี่ยงปานกลาง เน้นพอร์ตแบบสมดุล`
+    text: `อายุ 35 ปี\nเงินเดือนประมาณแสนห้า\nโบนัสปีละ 4 เดือน\nซื้อ RMF บ้างนิดหน่อย\nมีประกันชีวิตอยู่แล้ว\nอยากลดภาษีเพิ่ม\nความเสี่ยงปานกลาง เน้นพอร์ตแบบสมดุล`
   },
   {
     name: "Client B (Freelance, High-Tax)",
@@ -81,15 +81,16 @@ function computeAudit(result: any) {
   const penaltySum = missingFields.reduce((s, f) => s + f.penalty, 0);
   const completeness = Math.max(0, 100 - penaltySum);
   const comp = result?.compliance;
+  const critIssues = (comp?.issues ?? []).filter((i: any) => i.severity === "critical").length;
   const complianceScore = comp
-    ? (comp.status === "approved" ? 100 : Math.max(30, 100 - (comp.violations?.length ?? 0) * 30))
+    ? (comp.approved ? 100 : Math.max(30, 100 - critIssues * 30))
     : 70;
   const funds = result?.recommendation?.recommended_funds?.length ?? 0;
   const fit = funds > 0 ? 100 : 50;
   const factors = [
     { label: "NLP Extraction Confidence", value: conf, weight: 0.30, note: "Typhoon interpreter certainty" },
     { label: "Profile Completeness", value: completeness, weight: 0.30, note: missingFields.length ? `${missingFields.length} field(s) missing` : "All key fields present" },
-    { label: "Compliance Integrity", value: complianceScore, weight: 0.25, note: comp ? (comp.status === "approved" ? "No violations" : `${comp.violations?.length ?? 0} violation(s)`) : "Pending advisor approval" },
+    { label: "Compliance Integrity", value: complianceScore, weight: 0.25, note: comp ? (comp.approved ? "No critical issues" : `${critIssues} critical issue(s)`) : "Pending advisor approval" },
     { label: "Recommendation Coverage", value: fit, weight: 0.15, note: funds ? `${funds} fund(s) matched` : "No funds matched" },
   ];
   const score = Math.round(factors.reduce((s, f) => s + f.value * f.weight, 0));
@@ -136,7 +137,7 @@ function buildDecisionTimeline(result: any, auditScore: number | null) {
       ],
       conclusion: [
         s?.recommended_allocation
-          ? `Suitable allocation: ${Object.entries(s.recommended_allocation).map(([k, v]) => `${v}% ${k}`).join(" / ")}`
+          ? `Suitable allocation: ${Object.entries(s.recommended_allocation).map(([k, v]) => `${Array.isArray(v) ? `${v[0]}–${v[1]}` : v}% ${k}`).join(" / ")}`
           : "Allocation determined",
       ],
     },
@@ -172,9 +173,9 @@ function buildDecisionTimeline(result: any, auditScore: number | null) {
       ],
       conclusion: [
         comp
-          ? (comp.status === "approved"
+          ? (comp.approved
               ? "Compliance approved — cleared for final action"
-              : `Rejected — ${comp.violations?.length ?? 0} violation(s) flagged`)
+              : `Rejected — ${(comp.issues ?? []).filter((i: any) => i.severity === "critical").length} critical issue(s) flagged`)
           : "Human review required before final action",
       ],
     },
@@ -324,7 +325,7 @@ export default function Dashboard() {
       "RECOMMENDED PORTFOLIO",
       ...funds.map((x: any) => `  - ${x.fund_code} (${x.fund_type}) ${f(x.amount_thb)} | risk ${x.risk_level}`),
       "",
-      "COMPLIANCE: " + (result.compliance?.status === "approved" ? "APPROVED" : (result.compliance?.status ?? "pending")),
+      "COMPLIANCE: " + (result.compliance ? (result.compliance.approved ? "APPROVED" : "REJECTED") : "pending"),
       "",
       "Disclaimer: Mutual fund investments involve risk. Returns are not guaranteed.",
     ];
@@ -556,7 +557,7 @@ export default function Dashboard() {
                 
                 {/* Post-approval confirmation (appears after the compliance audit) */}
                 {result.compliance && result.status !== "awaiting_review" && (
-                  result.compliance.status === "approved" ? (
+                  result.compliance.approved ? (
                     <div className="p-6 bg-slate-900/40 border border-emerald-500/25 rounded-xl flex flex-col gap-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -596,7 +597,7 @@ export default function Dashboard() {
                         <div>
                           <h3 className="font-semibold text-base text-slate-100">Compliance rejected</h3>
                           <p className="text-xs text-slate-400 mt-1 max-w-md">
-                            The audit flagged {result.compliance.violations?.length ?? 0} issue(s). Revise the recommendation before proceeding.
+                            The audit flagged {result.compliance.issues?.length ?? 0} issue(s). Revise the recommendation before proceeding.
                           </p>
                         </div>
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/25 shrink-0">
@@ -613,6 +614,23 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )
+                )}
+
+                {/* Clarification needed (early stop: ambiguous / missing-critical / risk conflict) */}
+                {(result.status === "needs_clarification" || result.status === "needs_review") && (
+                  <div className="p-5 bg-amber-500/[0.06] border border-amber-500/30 rounded-xl flex items-start gap-3">
+                    <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <h3 className="font-semibold text-sm text-amber-300">
+                        {result.status === "needs_review" ? "Advisor confirmation needed" : "More information needed before we can proceed"}
+                      </h3>
+                      <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                        {result.typhoon_result?.clarification_needed
+                          || result.suitability?.review_reason
+                          || "The workflow paused before completing because the profile is incomplete or ambiguous — by design, it never guesses missing client data. Add the details below and re-analyze."}
+                      </p>
+                    </div>
+                  </div>
                 )}
 
                 {/* 1. Client Info Summary (shows what the client actually provided; "-" if not) */}
@@ -706,7 +724,7 @@ export default function Dashboard() {
                       >
                         <div className="flex items-center gap-3">
                           {result.compliance ? (
-                            result.compliance.status === "approved" ? (
+                            result.compliance.approved ? (
                               <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20"><ShieldCheck className="h-6 w-6" /></div>
                             ) : (
                               <div className="p-2 bg-red-500/10 text-red-400 rounded-lg border border-red-500/20"><ShieldAlert className="h-6 w-6" /></div>
@@ -716,8 +734,8 @@ export default function Dashboard() {
                           )}
                           <div>
                             <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Compliance</p>
-                            <p className={`text-lg font-bold ${result.compliance ? (result.compliance.status === "approved" ? "text-emerald-400" : "text-red-400") : "text-amber-400"}`}>
-                              {result.compliance ? (result.compliance.status === "approved" ? "Compliant" : "Violation") : "Pending"}
+                            <p className={`text-lg font-bold ${result.compliance ? (result.compliance.approved ? "text-emerald-400" : "text-red-400") : "text-amber-400"}`}>
+                              {result.compliance ? (result.compliance.approved ? "Compliant" : "Violation") : "Pending"}
                             </p>
                           </div>
                         </div>
@@ -747,14 +765,18 @@ export default function Dashboard() {
                       <div className="glass-panel p-5 border-white/5 flex flex-col gap-2">
                         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Compliance Breakdown</p>
                         {!result.compliance ? (
-                          <p className="text-xs text-amber-300">The SEC audit runs after you approve the recommendation. Click “Approve &amp; Submit Compliance” above.</p>
-                        ) : result.compliance.violations?.length > 0 ? (
+                          <p className="text-xs text-amber-300">The SEC audit runs once the profile is complete and the recommendation is generated.</p>
+                        ) : result.compliance.issues?.length > 0 ? (
                           <div className="flex flex-col gap-1.5">
-                            {result.compliance.violations.map((v: string, i: number) => (
-                              <div key={i} className="p-2.5 bg-red-500/5 border border-red-500/15 rounded-md text-xs text-red-300 flex items-start gap-2">
-                                <span className="text-red-400 font-bold shrink-0">•</span><span>{v}</span>
-                              </div>
-                            ))}
+                            {result.compliance.issues.map((iss: any, i: number) => {
+                              const crit = iss.severity === "critical";
+                              return (
+                                <div key={i} className={`p-2.5 rounded-md text-xs flex items-start gap-2 border ${crit ? "bg-red-500/5 border-red-500/15 text-red-300" : "bg-amber-500/5 border-amber-500/15 text-amber-300"}`}>
+                                  <span className={`font-bold shrink-0 uppercase text-[10px] mt-0.5 ${crit ? "text-red-400" : "text-amber-400"}`}>{iss.severity}</span>
+                                  <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {iss.route_back_to}</span> : null}</span>
+                                </div>
+                              );
+                            })}
                           </div>
                         ) : (
                           <div className="p-2.5 bg-emerald-500/5 border border-emerald-500/15 rounded-md text-xs text-emerald-300 flex items-center gap-2">
@@ -1132,7 +1154,7 @@ export default function Dashboard() {
                     </div>
 
                     <div className="flex items-start gap-4">
-                      {result.compliance.status === "approved" ? (
+                      {result.compliance.approved ? (
                         <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shadow-lg shadow-emerald-500/5">
                           <ShieldCheck className="h-8 w-8" />
                         </div>
@@ -1145,31 +1167,34 @@ export default function Dashboard() {
                       <div className="flex-1 flex flex-col gap-2">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold">Status:</span>
-                          <span className={`text-sm font-bold tracking-wider ${result.compliance.status === "approved" ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {result.compliance.status === "approved" ? 'PASSED & COMPLIANT' : 'VIOLATION DETECTED'}
+                          <span className={`text-sm font-bold tracking-wider ${result.compliance.approved ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {result.compliance.approved ? 'PASSED & COMPLIANT' : 'VIOLATION DETECTED'}
                           </span>
                         </div>
                         
                         <p className="text-xs text-slate-300 leading-relaxed font-mono">
-                          {result.compliance.status === "approved" 
+                          {result.compliance.approved 
                             ? "All recommendations comply with SEC Thailand regulations. No return guarantee claims detected."
-                            : `Compliance checks flagged ${result.compliance.violations?.length ?? 0} critical violation(s). Core requirements failed.`
+                            : `Compliance checks flagged ${result.compliance.issues?.length ?? 0} critical violation(s). Core requirements failed.`
                           }
                         </p>
                       </div>
                     </div>
 
-                    {/* Violations List */}
-                    {result.compliance.violations?.length > 0 && (
+                    {/* Issues List */}
+                    {result.compliance.issues?.length > 0 && (
                       <div className="mt-2 flex flex-col gap-2">
-                        <span className="text-[10px] uppercase font-bold text-red-400 tracking-wider">Critical Violations</span>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Compliance Findings</span>
                         <div className="flex flex-col gap-1.5">
-                          {result.compliance.violations.map((v: string, idx: number) => (
-                            <div key={idx} className="p-2.5 bg-red-500/5 border border-red-500/15 rounded-md text-xs text-red-300 flex items-start gap-2 font-mono">
-                              <span className="text-red-400 font-bold shrink-0">•</span>
-                              <span>{v}</span>
-                            </div>
-                          ))}
+                          {result.compliance.issues.map((iss: any, idx: number) => {
+                            const crit = iss.severity === "critical";
+                            return (
+                              <div key={idx} className={`p-2.5 rounded-md text-xs flex items-start gap-2 border ${crit ? "bg-red-500/5 border-red-500/15 text-red-300" : "bg-amber-500/5 border-amber-500/15 text-amber-300"}`}>
+                                <span className={`font-bold shrink-0 uppercase text-[10px] mt-0.5 ${crit ? "text-red-400" : "text-amber-400"}`}>{iss.severity}</span>
+                                <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {iss.route_back_to}</span> : null}</span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}

@@ -184,7 +184,28 @@ async def approve_recommendation(request: Dict[str, Any]):
         current_state = app_workflow.get_state(config)
         if not current_state or not current_state.values:
             raise HTTPException(status_code=404, detail="Advisory session state not found")
-            
+
+        # Guard: only the genuine pre-compliance checkpoint may resume into the
+        # audit. Early stops (needs_clarification / needs_review) lack the
+        # tax/recommendation/explanation the compliance node needs — forcing
+        # compliance there would crash. Return the current state instead so the
+        # advisor supplies the missing info and re-runs.
+        current_status = current_state.values.get("status")
+        if current_status != "awaiting_review":
+            vals = current_state.values
+            return AdvisoryWorkflowResponse(
+                session_id=session_id,
+                typhoon_result=vals.get("typhoon_result"),
+                client_data=vals.get("client_data"),
+                suitability=vals.get("suitability"),
+                tax_result=vals.get("tax_result"),
+                recommendation=vals.get("recommendation"),
+                explanation=vals.get("explanation"),
+                compliance=vals.get("compliance"),
+                status=current_status,
+                trace=vals.get("trace", []),
+            )
+
         # Update the status to direct the routing logic to 'compliance'
         app_workflow.update_state(config, {"status": "compliance", "trace": current_state.values.get("trace", []) + ["[Human Review Node] Advisor APPROVED portfolio. Proceeding to SEC Audit..."]}, as_node="human_review")
         

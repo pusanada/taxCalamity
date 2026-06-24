@@ -23,8 +23,8 @@ class FinancialProfile(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
-    age = Column(Integer, nullable=False)
-    monthly_income = Column(Float, nullable=False)
+    age = Column(Integer, nullable=True)            # may be null when client did not state it
+    monthly_income = Column(Float, nullable=True)   # may be null when client did not state it
     bonus_months = Column(Integer, default=0)
     existing_rmf = Column(Float, default=0.0)
     existing_ssf = Column(Float, default=0.0)

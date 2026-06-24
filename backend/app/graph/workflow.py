@@ -155,18 +155,20 @@ def typhoon_interpreter_node(state: AdvisoryState) -> AdvisoryState:
         # Log Agent Run
         log_agent_run_to_db(state["session_id"], "Thai Financial Interpreter Agent", state["raw_input_text"], typhoon_result)
         
-        # Quality Control: a low confidence score is a NON-BLOCKING warning.
-        # We still run the full pipeline (defaults fill any gaps) so the advisor
-        # can review a complete recommendation at the human_review checkpoint,
-        # where the low-confidence flag is surfaced. Branching straight to
-        # human_review here would skip intake/tax/recommendation and break the
-        # downstream compliance step.
-        if typhoon_result.confidence < 0.80:
+        # Hard gate: ambiguous=True (confidence < 0.6, or the LLM judged the
+        # request genuinely unclear) now actually stops the pipeline here and
+        # routes to human_review, instead of silently continuing on guessed/
+        # default data. This replaces the old non-blocking 0.80 warning.
+        if typhoon_result.ambiguous:
             state["trace"].append(
-                f"[Typhoon Interpreter Node] WARNING: Confidence {typhoon_result.confidence:.2f} is below the 0.80 "
-                f"threshold. Recommendation built on defaults for missing fields; manual verification advised."
+                f"[Typhoon Interpreter Node] AMBIGUOUS (confidence {typhoon_result.confidence:.2f}). "
+                f"Clarification needed: {typhoon_result.clarification_needed}. Stopping for advisor input."
             )
-        state["status"] = "client_intake"
+            # Terminal stop (not the pre-compliance checkpoint): the advisor must
+            # supply clarification and re-run; we never continue on guessed data.
+            state["status"] = "needs_clarification"
+        else:
+            state["status"] = "client_intake"
     except Exception as e:
         state["trace"].append(f"[Typhoon Interpreter Node] Failed: {str(e)}")
         state["status"] = "failed"
@@ -180,7 +182,8 @@ def client_intake_node(state: AdvisoryState) -> AdvisoryState:
     try:
         client_data = run_intake_crew(state["typhoon_result"])
         state["client_data"] = client_data
-        state["trace"].append(f"[Intake Node] Profile mapped. Age: {client_data.age}, Goal: {client_data.goal}, Monthly Income: ฿{client_data.monthly_income:,.2f}")
+        income_str = f"฿{client_data.monthly_income:,.2f}" if client_data.monthly_income is not None else "null (not stated by client)"
+        state["trace"].append(f"[Intake Node] Profile mapped. Age: {client_data.age}, Goal: {client_data.goal}, Monthly Income: {income_str}")
         
         # Log Agent Run & Create Client Record
         log_agent_run_to_db(state["session_id"], "Client Intake Agent", state["typhoon_result"], client_data)
@@ -211,8 +214,20 @@ def client_intake_node(state: AdvisoryState) -> AdvisoryState:
             db.commit()
         finally:
             db.close()
-            
-        state["status"] = "suitability"
+
+        # Hard gate: never proceed to Suitability/Tax Engine on incomplete or
+        # internally-inconsistent client data. Tax Engine does direct arithmetic
+        # on monthly_income, so a None here must never reach it.
+        if not client_data.ready_for_suitability:
+            state["trace"].append(
+                f"[Intake Node] NOT READY for suitability. missing_critical={client_data.missing_critical}, "
+                f"sanity_flags={client_data.sanity_flags}. Stopping for advisor input."
+            )
+            # Terminal stop: missing critical data or an inconsistent profile. The
+            # advisor fills the gaps (via the missing-profile inputs) and re-runs.
+            state["status"] = "needs_clarification"
+        else:
+            state["status"] = "suitability"
     except Exception as e:
         state["trace"].append(f"[Intake Node] Failed: {str(e)}")
         state["status"] = "failed"
@@ -243,7 +258,15 @@ def suitability_node(state: AdvisoryState) -> AdvisoryState:
         finally:
             db.close()
             
-        state["status"] = "tax_engine"
+        if suitability.requires_human_review:
+            state["trace"].append(
+                f"[Suitability Node] REQUIRES HUMAN REVIEW: {suitability.review_reason}"
+            )
+            # Terminal stop: risk/horizon conflict needs advisor confirmation before
+            # any portfolio is built.
+            state["status"] = "needs_review"
+        else:
+            state["status"] = "tax_engine"
     except Exception as e:
         state["trace"].append(f"[Suitability Node] Failed: {str(e)}")
         state["status"] = "failed"
@@ -464,18 +487,18 @@ def compliance_node(state: AdvisoryState) -> AdvisoryState:
                 session_id=state["session_id"],
                 agent_name="Compliance Agent",
                 action="AUDIT_COMPLIANCE",
-                detail=f"Compliance check completed. Status: {compliance.status}",
-                is_compliant=(compliance.status == "approved")
+                detail=f"Compliance check completed. Approved: {compliance.approved}",
+                is_compliant=compliance.approved
             )
             db.add(audit)
             
-            # Save violations as flags
-            for violation in compliance.violations:
+            # Save each structured issue as a flag
+            for issue in compliance.issues:
                 flag = ComplianceFlag(
                     session_id=state["session_id"],
-                    rule_name="Regulatory Rule Check",
-                    description=violation,
-                    severity="VIOLATION",
+                    rule_name=issue.location or "Regulatory Rule Check",
+                    description=issue.description,
+                    severity=issue.severity.upper(),
                     status="FLAGGED"
                 )
                 db.add(flag)
@@ -483,11 +506,19 @@ def compliance_node(state: AdvisoryState) -> AdvisoryState:
         finally:
             db.close()
             
-        if compliance.status == "approved":
+        if compliance.approved:
             state["trace"].append("[Compliance Node] Audit APPROVED. No SEC or return guarantee violations detected.")
             state["status"] = "report"
         else:
-            state["trace"].append(f"[Compliance Node] Audit REJECTED. Caught {len(compliance.violations)} violations.")
+            route_targets = sorted({i.route_back_to for i in compliance.issues if i.route_back_to})
+            state["trace"].append(
+                f"[Compliance Node] Audit REJECTED. {len(compliance.issues)} issue(s) found "
+                f"(route_back_to: {route_targets or ['human_review']}). "
+                f"Auditor does not edit content itself — routing to human review."
+            )
+            # The auditor only flags; it never auto-fixes or auto-reruns an
+            # upstream node. A rejection always surfaces to a human, who can
+            # see compliance.issues[].route_back_to to decide what to correct.
             state["status"] = "non_compliant"
     except Exception as e:
         state["trace"].append(f"[Compliance Node] Failed: {str(e)}")
@@ -505,7 +536,7 @@ def report_node(state: AdvisoryState) -> AdvisoryState:
     db = SessionLocal()
     try:
         # Calculate final compliance check status
-        is_passed = (state["compliance"].status == "approved" if state.get("compliance") else False)
+        is_passed = (state["compliance"].approved if state.get("compliance") else False)
         exec_record = CrewExecution(
             session_id=state["session_id"],
             status="COMPLETED" if is_passed else "REJECTED",
@@ -544,6 +575,10 @@ def route_flow(state: AdvisoryState) -> str:
         return "compliance"
     elif status == "report":
         return "report"
+    # Terminal / pause statuses — needs_clarification, needs_review, awaiting_review,
+    # failed, non_compliant, completed — all end this invoke. Early stops surface to
+    # the advisor (who supplies missing info and re-runs); they must NOT fall through
+    # to the compliance-resume path, which assumes tax/recommendation/explanation exist.
     return END
 
 workflow = StateGraph(AdvisoryState)
@@ -568,10 +603,26 @@ workflow.add_conditional_edges("typhoon_interpreter", route_flow, {
     "human_review": "human_review",
     "__end__": END
 })
-workflow.add_conditional_edges("client_intake", route_flow, {"suitability": "suitability", "__end__": END})
-workflow.add_conditional_edges("suitability", route_flow, {"tax_engine": "tax_engine", "__end__": END})
-workflow.add_conditional_edges("tax_engine", route_flow, {"recommendation": "recommendation", "__end__": END})
-workflow.add_conditional_edges("recommendation", route_flow, {"explanation": "explanation", "__end__": END})
+workflow.add_conditional_edges("client_intake", route_flow, {
+    "suitability": "suitability",
+    "human_review": "human_review",
+    "__end__": END
+})
+workflow.add_conditional_edges("suitability", route_flow, {
+    "tax_engine": "tax_engine",
+    "human_review": "human_review",
+    "__end__": END
+})
+workflow.add_conditional_edges("tax_engine", route_flow, {
+    "recommendation": "recommendation",
+    "human_review": "human_review",
+    "__end__": END
+})
+workflow.add_conditional_edges("recommendation", route_flow, {
+    "explanation": "explanation",
+    "human_review": "human_review",
+    "__end__": END
+})
 workflow.add_conditional_edges("explanation", route_flow, {"human_review": "human_review", "__end__": END})
 
 # Set human review pause state
@@ -583,6 +634,7 @@ workflow.add_conditional_edges("human_review", route_flow, {
 
 workflow.add_conditional_edges("compliance", route_flow, {
     "report": "report",
+    "human_review": "human_review",
     "__end__": END
 })
 
@@ -611,6 +663,7 @@ _serde = JsonPlusSerializer(
             "FundRecommendationSchema",
             "ExplanationDetail",
             "ExplanationSchema",
+            "ComplianceIssue",
             "ComplianceReportSchema",
         )
     ]
