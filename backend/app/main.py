@@ -31,6 +31,7 @@ from backend.app.schemas.schemas import (
 from backend.app.graph.workflow import app_workflow
 from backend.app.services.fund_catalog import seed_funds, sync_funds_from_sec
 from backend.app.services.file_extract import extract_text_from_file
+from backend.app.services.chat_service import synthesize_chat_reply
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
 
@@ -99,6 +100,32 @@ async def extract_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail="No readable financial text found in the file.")
 
     return {"extracted_text": text, "source": file.filename, "method": method}
+
+
+@app.post("/api/v1/chat")
+async def chat(request: Dict[str, Any], db: Session = Depends(get_db)):
+    """
+    POST /api/v1/chat
+    Client-facing Q&A grounded in a session's pipeline output. Read-only: it
+    synthesizes/explains, never computes tax, never overrides compliance.
+    Body: {"session_id": str, "message": str}
+    """
+    session_id = request.get("session_id")
+    message = (request.get("message") or "").strip()
+    if not session_id or not message:
+        raise HTTPException(status_code=400, detail="session_id and message are required.")
+
+    wf_state = db.query(WorkflowState).filter(WorkflowState.session_id == session_id).first()
+    if not wf_state:
+        raise HTTPException(status_code=404, detail="Advisory session not found.")
+
+    try:
+        # Synthesis is a blocking LLM call -> run off the event loop.
+        reply = await run_in_threadpool(synthesize_chat_reply, wf_state.state_data, message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat synthesis failed: {str(e)}")
+
+    return {"reply": reply, "session_id": session_id}
 
 
 @app.post("/api/v1/analyze", response_model=AdvisoryWorkflowResponse)

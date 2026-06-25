@@ -17,7 +17,8 @@ import {
   ChevronDown,
   Gauge,
   Send,
-  Pencil
+  Pencil,
+  MessageCircle
 } from 'lucide-react';
 // Backend base URL. Set NEXT_PUBLIC_API_URL in the deployment environment
 // (e.g. the Render backend URL); falls back to localhost for local dev.
@@ -196,6 +197,33 @@ export default function Dashboard() {
   const [optionalInputs, setOptionalInputs] = useState<Record<string, string>>({});
   // Whether the advisor has generated the client proposal
   const [proposalDone, setProposalDone] = useState(false);
+
+  // Client-facing chat (grounded in the session's pipeline output)
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "bot"; text: string }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const handleSendChat = async () => {
+    const q = chatInput.trim();
+    if (!q || !result?.session_id) return;
+    setChatMessages((prev) => [...prev, { role: "user", text: q }]);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: result.session_id, message: q }),
+      });
+      const data = await res.json();
+      const reply = res.ok ? (data.reply || "(ไม่มีคำตอบ)") : (data.detail || `เกิดข้อผิดพลาด (${res.status})`);
+      setChatMessages((prev) => [...prev, { role: "bot", text: reply }]);
+    } catch {
+      setChatMessages((prev) => [...prev, { role: "bot", text: "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ" }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
 
   // File upload state
   const [fileLoading, setFileLoading] = useState(false);
@@ -1269,10 +1297,65 @@ export default function Dashboard() {
                   </div>
                 )}
 
+                {/* Client-facing chat — grounded in this session's pipeline output */}
+                <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                    <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">Ask the AI Advisor</h3>
+                    <MessageCircle className="h-4 w-4 text-slate-400" />
+                  </div>
+
+                  <div className="flex flex-col gap-3 max-h-80 overflow-y-auto pr-1">
+                    {chatMessages.length === 0 && (
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        ถามคำถามเกี่ยวกับผลการวิเคราะห์นี้ได้เลย เช่น &quot;ประหยัดภาษีได้เท่าไหร่?&quot; หรือ &quot;ทำไมแนะนำกองทุนนี้?&quot;
+                        <br />
+                        <span className="text-slate-600">คำตอบอ้างอิงจากผลของระบบเท่านั้น และไม่ใช่คำแนะนำที่ผ่านการรับรองจนกว่าที่ปรึกษาจะตรวจสอบ</span>
+                      </p>
+                    )}
+                    {chatMessages.map((m, idx) => (
+                      <div key={idx} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
+                          m.role === "user"
+                            ? "bg-indigo-500/15 text-indigo-100 border border-indigo-500/20"
+                            : "bg-white/5 text-slate-200 border border-white/10"
+                        }`}>
+                          {m.text}
+                        </div>
+                      </div>
+                    ))}
+                    {chatLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-white/5 text-slate-400 border border-white/10 rounded-lg px-3 py-2 text-xs flex items-center gap-2">
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" /> กำลังคิด...
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 border-t border-white/5 pt-3">
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && !chatLoading) handleSendChat(); }}
+                      placeholder="พิมพ์คำถามของคุณ..."
+                      disabled={chatLoading}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/40 disabled:opacity-50"
+                    />
+                    <button
+                      onClick={handleSendChat}
+                      disabled={chatLoading || !chatInput.trim()}
+                      className="p-2 bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 rounded-md hover:bg-indigo-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Send className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
               </div>
             )}
           </div>
-          
+
         </div>
       </main>
     </div>
