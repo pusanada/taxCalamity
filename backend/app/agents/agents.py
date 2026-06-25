@@ -5,6 +5,7 @@ from typing import Optional, Any
 from openai import OpenAI
 
 from backend.app.config import settings
+from backend.app.agents.pii_masking import mask_typhoon_output
 from backend.app.schemas.schemas import (
     ClientIntakeSchema,
     SuitabilitySchema,
@@ -149,6 +150,18 @@ _INTERPRETER_SYSTEM = (
     "- 'เงินเดือนประมาณแสนห้า' -> monthly_income 150000\n"
     "- 'รายได้ 120,000 ต่อเดือน' -> monthly_income 120000\n"
     "- 'ซื้อ RMF บ้างนิดหน่อย' -> rmf is small/unspecified, use null (not 0)\n\n"
+    "PII rule (critical — this overrides any instinct to be thorough):\n"
+    "- normalized_thai and english_translation must be a SHORT financial summary, "
+    "NEVER a transcription/copy of the source document. If the client pasted a tax "
+    "form, payslip, or any document containing names, ID numbers, company names, "
+    "addresses, or account numbers, DO NOT reproduce those in your output at all.\n"
+    "- Only carry over what's needed downstream: income figures, existing "
+    "RMF/SSF/insurance amounts, age, goal, risk signals. Drop everything else — "
+    "document headers, taxpayer ID, payer/payee names, company names, addresses.\n"
+    "- Example: input contains 'เลขประจำตัวผู้เสียภาษี 0107535000123 บริษัท ABC จำกัด "
+    "รายได้ 1,200,000 บาท' -> normalized_thai should be just 'รายได้ 1,200,000 บาทต่อปี' "
+    "(the ID number and company name are dropped entirely, not masked with a "
+    "placeholder — they should simply never appear).\n\n"
     "Confidence and ambiguity rule (hard gate, not a suggestion):\n"
     "- confidence must reflect how certain you are about BOTH the extracted numbers "
     "AND the client's intent.\n"
@@ -194,7 +207,7 @@ def _coerce_typhoon(data: dict) -> TyphoonOutputSchema:
     ent = data.get("entities") or {}
     confidence = float(data.get("confidence", 0.0))
     ambiguous = bool(data.get("ambiguous", False)) or confidence < 0.6
-    return TyphoonOutputSchema(
+    result = TyphoonOutputSchema(
         normalized_thai=data.get("normalized_thai", ""),
         english_translation=data.get("english_translation", ""),
         confidence=confidence,
@@ -209,6 +222,11 @@ def _coerce_typhoon(data: dict) -> TyphoonOutputSchema:
             if k in ent
         }),
     )
+    # Deterministic backstop: even though the prompt instructs the model not
+    # to reproduce document PII, never trust that alone. Scrub before this
+    # ever reaches log_agent_run_to_db / save_workflow_state_to_db.
+    mask_typhoon_output(result)
+    return result
 
 
 def run_typhoon_interpreter_crew(raw_input_text: str) -> TyphoonOutputSchema:
@@ -233,7 +251,9 @@ def run_typhoon_interpreter_crew(raw_input_text: str) -> TyphoonOutputSchema:
         except Exception as e:
             _log(f"[Typhoon] Groq fallback failed: {e}")
 
-    return _maybe_mock(lambda: _mock_typhoon(raw_input_text))
+    mock_result = _maybe_mock(lambda: _mock_typhoon(raw_input_text))
+    mask_typhoon_output(mock_result)
+    return mock_result
 
 
 # ============================================================================
