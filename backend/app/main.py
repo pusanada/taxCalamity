@@ -31,7 +31,13 @@ from backend.app.schemas.schemas import (
 from backend.app.graph.workflow import app_workflow
 from backend.app.services.fund_catalog import seed_funds, sync_funds_from_sec
 from backend.app.services.file_extract import extract_text_from_file
-from backend.app.services.chat_service import synthesize_chat_reply
+from backend.app.services.chat_service import (
+    synthesize_chat_reply_v2,
+    extract_entities_from_message,
+    merge_chat_profile,
+    should_escalate_to_advisor,
+    build_escalate_suggested_action,
+)
 from backend.app.services.what_if_detector import detect_what_if, WHAT_IF_REFUSAL_TEMPLATE
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
@@ -132,13 +138,33 @@ async def chat(request: Dict[str, Any], db: Session = Depends(get_db)):
             "suggested_action": what_if.to_suggested_action(),
         }
 
+    # Cross-turn accumulation: extract any new facts the client stated in THIS
+    # message and merge them into the session's persistent chat_profile, so
+    # missing_fields shrinks turn by turn instead of being recomputed from the
+    # frozen pipeline client_data every time (the repeated "ข้อมูลยังไม่ครบ" bug).
+    state_data = wf_state.state_data or {}
+    chat_profile = state_data.get("chat_profile") or {}
+    new_entities = await run_in_threadpool(extract_entities_from_message, message)
+    chat_profile = merge_chat_profile(chat_profile, new_entities, message)
+    try:
+        # Reassign (not in-place mutate) so SQLAlchemy flags the JSON column dirty.
+        wf_state.state_data = {**state_data, "chat_profile": chat_profile}
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    escalate = should_escalate_to_advisor(message, chat_profile)
+
     try:
         # Synthesis is a blocking LLM call -> run off the event loop.
-        reply = await run_in_threadpool(synthesize_chat_reply, wf_state.state_data, message)
+        reply = await run_in_threadpool(
+            synthesize_chat_reply_v2, wf_state.state_data, chat_profile, message
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat synthesis failed: {str(e)}")
 
-    return {"reply": reply, "session_id": session_id, "suggested_action": None}
+    suggested_action = build_escalate_suggested_action() if escalate else None
+    return {"reply": reply, "session_id": session_id, "suggested_action": suggested_action}
 
 
 @app.post("/api/v1/analyze", response_model=AdvisoryWorkflowResponse)

@@ -248,6 +248,7 @@ export default function Dashboard() {
     type: string;
     label: string;
     prefill?: { investment_amount?: number | null };
+    contact_method?: string;
   } | null;
   const [chatMessages, setChatMessages] = useState<{ role: "user" | "bot"; text: string; action?: SuggestedAction }[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -1388,6 +1389,17 @@ export default function Dashboard() {
                             disabled={loading}
                             onRun={handleWhatIfReanalyze}
                           />
+                        )}
+                        {m.action?.type === "escalate_to_advisor" && (
+                          <div className="mt-2 max-w-[85%] rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-300/80 font-outfit">
+                              <ShieldAlert className="h-3 w-3" /> escalate_to_advisor
+                            </div>
+                            <div className="text-xs text-slate-200">{m.action.label}</div>
+                            {m.action.contact_method && (
+                              <div className="text-[11px] text-amber-200/80 break-all">{m.action.contact_method}</div>
+                            )}
+                          </div>
                         )}
                       </div>
                     ))}
