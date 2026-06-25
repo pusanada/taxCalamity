@@ -183,6 +183,51 @@ function buildDecisionTimeline(result: any, auditScore: number | null) {
   ];
 }
 
+// What-if CTA rendered under a chat bubble when the backend detector flags an
+// "invest X" hypothetical. Holds its own editable amount so the client can
+// tweak the prefilled number before re-running the deterministic pipeline.
+function WhatIfCTA({
+  label,
+  initialAmount,
+  disabled,
+  onRun,
+}: {
+  label: string;
+  initialAmount: number | null | undefined;
+  disabled?: boolean;
+  onRun: (amount: number) => void;
+}) {
+  const [amount, setAmount] = useState<string>(
+    initialAmount != null ? String(Math.round(initialAmount)) : ""
+  );
+  const numeric = Number(amount.replace(/,/g, ""));
+  const valid = Number.isFinite(numeric) && numeric > 0;
+  return (
+    <div className="mt-2 max-w-[85%] rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 flex flex-col gap-2">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-indigo-300/80 font-outfit">
+        <RefreshCw className="h-3 w-3" /> reanalyze_form
+      </div>
+      <label className="text-[11px] text-slate-400">จำนวนเงินลงทุน (บาท)</label>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        placeholder="เช่น 350000"
+        disabled={disabled}
+        className="bg-white/5 border border-white/10 rounded-md px-3 py-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/40 disabled:opacity-50"
+      />
+      <button
+        onClick={() => valid && onRun(numeric)}
+        disabled={disabled || !valid}
+        className="flex items-center justify-center gap-1.5 bg-indigo-500/20 text-indigo-200 border border-indigo-500/30 rounded-md px-3 py-2 text-xs font-medium hover:bg-indigo-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <RefreshCw className="h-3.5 w-3.5" /> {label}
+      </button>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [inputText, setInputText] = useState(PRESETS[0].text);
   const [loading, setLoading] = useState(false);
@@ -199,7 +244,12 @@ export default function Dashboard() {
   const [proposalDone, setProposalDone] = useState(false);
 
   // Client-facing chat (grounded in the session's pipeline output)
-  const [chatMessages, setChatMessages] = useState<{ role: "user" | "bot"; text: string }[]>([]);
+  type SuggestedAction = {
+    type: string;
+    label: string;
+    prefill?: { investment_amount?: number | null };
+  } | null;
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "bot"; text: string; action?: SuggestedAction }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
 
@@ -217,12 +267,22 @@ export default function Dashboard() {
       });
       const data = await res.json();
       const reply = res.ok ? (data.reply || "(ไม่มีคำตอบ)") : (data.detail || `เกิดข้อผิดพลาด (${res.status})`);
-      setChatMessages((prev) => [...prev, { role: "bot", text: reply }]);
+      setChatMessages((prev) => [...prev, { role: "bot", text: reply, action: res.ok ? (data.suggested_action ?? null) : null }]);
     } catch {
       setChatMessages((prev) => [...prev, { role: "bot", text: "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ" }]);
     } finally {
       setChatLoading(false);
     }
+  };
+
+  // What-if CTA: re-run the deterministic pipeline with the hypothetical amount.
+  // Per product decision, an "invest X" what-if is modelled as a 50/50 split
+  // across SSF + RMF (both are real Typhoon entity override keys). The numbers
+  // still come only from the Tax Engine re-run — never from the chat layer.
+  const handleWhatIfReanalyze = (amount: number) => {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    const half = Math.round(amount / 2);
+    handleRunWorkflow(undefined, { ssf: half, rmf: amount - half });
   };
 
   // File upload state
@@ -1313,7 +1373,7 @@ export default function Dashboard() {
                       </p>
                     )}
                     {chatMessages.map((m, idx) => (
-                      <div key={idx} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div key={idx} className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
                         <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
                           m.role === "user"
                             ? "bg-indigo-500/15 text-indigo-100 border border-indigo-500/20"
@@ -1321,6 +1381,14 @@ export default function Dashboard() {
                         }`}>
                           {m.text}
                         </div>
+                        {m.action?.type === "reanalyze_form" && (
+                          <WhatIfCTA
+                            label={m.action.label}
+                            initialAmount={m.action.prefill?.investment_amount}
+                            disabled={loading}
+                            onRun={handleWhatIfReanalyze}
+                          />
+                        )}
                       </div>
                     ))}
                     {chatLoading && (

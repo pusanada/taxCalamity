@@ -32,6 +32,7 @@ from backend.app.graph.workflow import app_workflow
 from backend.app.services.fund_catalog import seed_funds, sync_funds_from_sec
 from backend.app.services.file_extract import extract_text_from_file
 from backend.app.services.chat_service import synthesize_chat_reply
+from backend.app.services.what_if_detector import detect_what_if, WHAT_IF_REFUSAL_TEMPLATE
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
 
@@ -119,13 +120,25 @@ async def chat(request: Dict[str, Any], db: Session = Depends(get_db)):
     if not wf_state:
         raise HTTPException(status_code=404, detail="Advisory session not found.")
 
+    # What-if intent gate (runs BEFORE the chat LLM). If the client asks a
+    # hypothetical "invest X" scenario the chat must NOT compute, return a
+    # structured CTA that re-runs the deterministic pipeline instead of a
+    # dead-end refusal. No LLM call, no token spend, fully deterministic.
+    what_if = detect_what_if(message)
+    if what_if.detected:
+        return {
+            "reply": WHAT_IF_REFUSAL_TEMPLATE.format(amount_str=what_if.amount_str),
+            "session_id": session_id,
+            "suggested_action": what_if.to_suggested_action(),
+        }
+
     try:
         # Synthesis is a blocking LLM call -> run off the event loop.
         reply = await run_in_threadpool(synthesize_chat_reply, wf_state.state_data, message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat synthesis failed: {str(e)}")
 
-    return {"reply": reply, "session_id": session_id}
+    return {"reply": reply, "session_id": session_id, "suggested_action": None}
 
 
 @app.post("/api/v1/analyze", response_model=AdvisoryWorkflowResponse)
