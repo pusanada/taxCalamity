@@ -532,7 +532,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
           <div className="lg:col-span-7 flex flex-col gap-6">
             <div className="glass-panel p-6 glow-indigo flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold tracking-wider text-indigo-400 uppercase font-outfit">Client Transcription (Thai)</h2>
+                <h2 className="text-sm font-semibold tracking-wider text-indigo-400 uppercase font-outfit">{lang === "th" ? "ข้อความจากลูกค้า (ไทย)" : "Client Transcription (Thai)"}</h2>
                 <Coins className="h-4 w-4 text-slate-400" />
               </div>
               <p className="text-xs text-slate-400">
@@ -541,7 +541,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
               {/* Presets */}
               <div className="flex flex-col gap-2 mt-2">
-                <span className="text-[10px] uppercase font-bold text-slate-500">Intake Presets</span>
+                <span className="text-[10px] uppercase font-bold text-slate-500">{lang === "th" ? "ตัวอย่างข้อมูล" : "Intake Presets"}</span>
                 <div className="flex flex-col gap-1.5">
                   {PRESETS.map((p, idx) => (
                     <button
@@ -561,7 +561,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
               {/* File Upload */}
               <div className="flex flex-col gap-2 mt-2">
-                <span className="text-[10px] uppercase font-bold text-slate-500">Or upload a document</span>
+                <span className="text-[10px] uppercase font-bold text-slate-500">{lang === "th" ? "หรืออัปโหลดเอกสาร" : "Or upload a document"}</span>
                 <label
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => {
@@ -613,11 +613,11 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                 {loading ? (
                   <>
                     <RefreshCw className="h-4 w-4 animate-spin" />
-                    <span>Processing Agents...</span>
+                    <span>{lang === "th" ? "กำลังประมวลผล..." : "Processing Agents..."}</span>
                   </>
                 ) : (
                   <>
-                    <span>Run Orchestrator Loop</span>
+                    <span>{lang === "th" ? "วิเคราะห์ข้อมูล" : "Run Orchestrator Loop"}</span>
                   </>
                 )}
               </button>
@@ -645,7 +645,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
             
             {/* Catalog Info Box */}
             <div className="glass-panel p-5 border-white/5 flex flex-col gap-3">
-              <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">System Status</h3>
+              <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "สถานะระบบ" : "System Status"}</h3>
               <div className="flex flex-col gap-2.5 text-xs">
                 <div className="flex justify-between border-b border-white/5 pb-1.5">
                   <span className="text-slate-400">Typhoon NLP Engine</span>
@@ -785,7 +785,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                     <div className="p-6 bg-slate-900/40 border border-emerald-500/25 rounded-xl flex flex-col gap-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h3 className="font-semibold text-base text-slate-100">Compliance approved</h3>
+                          <h3 className="font-semibold text-base text-slate-100">{lang === "th" ? "ผ่านการตรวจสอบกำกับ" : "Compliance approved"}</h3>
                           <p className="text-xs text-slate-400 mt-1 max-w-md">
                             Audit confirmed. The advisor has signed off on this recommendation.
                           </p>
@@ -830,7 +830,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                     <div className="p-6 bg-slate-900/40 border border-red-500/25 rounded-xl flex flex-col gap-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h3 className="font-semibold text-base text-slate-100">Compliance rejected</h3>
+                          <h3 className="font-semibold text-base text-slate-100">{lang === "th" ? "ไม่ผ่านการตรวจสอบกำกับ" : "Compliance rejected"}</h3>
                           <p className="text-xs text-slate-400 mt-1 max-w-md">
                             The audit flagged {result.compliance.issues?.length ?? 0} issue(s). Revise the recommendation before proceeding.
                           </p>
@@ -882,13 +882,13 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                 {/* 1. Client Info Summary (shows what the client actually provided; "-" if not) */}
                 <div className="glass-panel p-6 border-white/5 grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Client Age</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "อายุลูกค้า" : "Client Age"}</span>
                     <span className="text-lg font-semibold text-slate-200">
                       {result.typhoon_result?.entities?.age != null ? `${result.typhoon_result.entities.age} Years Old` : "-"}
                     </span>
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Assessable Income</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "เงินได้ที่ประเมิน" : "Assessable Income"}</span>
                     <span className="text-lg font-semibold text-slate-200">
                       {(result.typhoon_result?.entities?.monthly_income != null || result.typhoon_result?.entities?.annual_income != null) && result.client_data
                         ? formatTHB((result.client_data.monthly_income * 12) + (result.client_data.monthly_income * result.client_data.bonus_months))
@@ -897,11 +897,11 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                     </span>
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Risk Profile</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "ระดับความเสี่ยง" : "Risk Profile"}</span>
                     <span className="text-lg font-semibold text-indigo-400">{dash(result.typhoon_result?.entities?.risk_profile)}</span>
                   </div>
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Financial Goal</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "เป้าหมายการเงิน" : "Financial Goal"}</span>
                     <span className="text-lg font-semibold text-emerald-400">{dash(result.typhoon_result?.entities?.goal)}</span>
                   </div>
                 </div>
@@ -931,7 +931,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                           <div>
                             <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Compliance</p>
                             <p className={`text-lg font-bold ${result.compliance ? (result.compliance.approved ? "text-emerald-400" : "text-red-400") : "text-amber-400"}`}>
-                              {result.compliance ? (result.compliance.approved ? "Compliant" : "Violation") : "Pending"}
+                              {result.compliance ? (result.compliance.approved ? (lang === "th" ? "ผ่าน" : "Compliant") : (lang === "th" ? "ไม่ผ่าน" : "Violation")) : (lang === "th" ? "รอตรวจ" : "Pending")}
                             </p>
                           </div>
                         </div>
@@ -948,7 +948,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                             <Gauge className="h-6 w-6" />
                           </div>
                           <div>
-                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">UQ Audit · Confidence</p>
+                            <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "ความเชื่อมั่น (UQ)" : "UQ Audit · Confidence"}</p>
                             <p className={`text-lg font-bold ${audit.score >= 80 ? "text-emerald-400" : audit.score >= 60 ? "text-amber-400" : "text-red-400"}`}>{audit.score}%</p>
                           </div>
                         </div>
@@ -1029,7 +1029,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                        <h3 className="text-sm font-semibold tracking-wider text-indigo-400 uppercase font-outfit">Typhoon Thai NLP Interpreter</h3>
+                        <h3 className="text-sm font-semibold tracking-wider text-indigo-400 uppercase font-outfit">{lang === "th" ? "ตัวแปลภาษาไทย Typhoon NLP" : "Typhoon Thai NLP Interpreter"}</h3>
                       </div>
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
                         result.typhoon_result.confidence >= 0.80 
@@ -1084,7 +1084,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                     {/* Entities details */}
                     {result.typhoon_result.entities && (
                       <div className="mt-1">
-                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Extracted Values Table</span>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "ตารางค่าที่สกัดได้" : "Extracted Values Table"}</span>
                         <div className="flex flex-wrap gap-2 mt-2">
                           {Object.entries(result.typhoon_result.entities).map(([key, val]: any) => {
                             if (val === null || val === undefined) return null;
@@ -1114,19 +1114,19 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
                     {/* Tax numbers */}
                     <div className="md:col-span-5 glass-panel p-6 border-white/5 flex flex-col justify-between gap-4">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Tax Optimization Results</h3>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "ผลการวางแผนภาษี" : "Tax Optimization Results"}</h3>
                       
                       <div className="flex flex-col gap-3">
                         <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-400">Tax Before Optimization:</span>
+                          <span className="text-slate-400">{lang === "th" ? "ภาษีก่อนปรับ:" : "Tax Before Optimization:"}</span>
                           <span className="font-semibold text-slate-300 font-mono">{formatTHB(result.tax_result.tax_before)}</span>
                         </div>
                         <div className="flex justify-between items-center text-sm border-b border-white/5 pb-3">
-                          <span className="text-slate-400">Tax After Optimization:</span>
+                          <span className="text-slate-400">{lang === "th" ? "ภาษีหลังปรับ:" : "Tax After Optimization:"}</span>
                           <span className="font-semibold text-slate-300 font-mono">{formatTHB(result.tax_result.tax_after)}</span>
                         </div>
                         <div className="flex justify-between items-center py-2">
-                          <span className="text-emerald-400 font-semibold text-sm">Tax Saved:</span>
+                          <span className="text-emerald-400 font-semibold text-sm">{lang === "th" ? "ภาษีที่ประหยัด:" : "Tax Saved:"}</span>
                           <span className="font-bold text-lg text-emerald-400 font-mono">{formatTHB(result.tax_result.saving)}</span>
                         </div>
                       </div>
@@ -1149,7 +1149,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
                     {/* SVG Chart Comparison */}
                     <div className="md:col-span-7 glass-panel p-6 border-white/5 flex flex-col gap-4">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Visualized Comparison (THB)</h3>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "เปรียบเทียบ (บาท)" : "Visualized Comparison (THB)"}</h3>
                       
                       {/* SVG Chart */}
                       <div className="flex-1 flex items-end justify-around h-44 mt-2 border-b border-slate-700/30 pb-2 relative">
@@ -1258,7 +1258,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                 {/* 4. Detailed Optimizations Investments */}
                 {result.tax_result?.detailed_calculations?.optimization_purchases && (
                   <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
-                    <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Required Investments to achieve tax savings</h3>
+                    <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "เงินลงทุนที่ต้องใช้เพื่อประหยัดภาษี" : "Required Investments to achieve tax savings"}</h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                       <div className="p-4 bg-slate-950/40 border border-white/5 rounded-lg">
                         <p className="text-xs text-slate-500 uppercase font-semibold font-outfit">Additional SSF Needed</p>
@@ -1337,7 +1337,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                 {result.compliance && (
                   <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">SEC Compliance Safeguard Report</h3>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "รายงานการตรวจสอบกำกับ SEC" : "SEC Compliance Safeguard Report"}</h3>
                       <span className="text-xs text-slate-400">Compliance Audit Agent</span>
                     </div>
 
@@ -1393,7 +1393,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                 {audit && (
                   <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">Explainable Decision Timeline</h3>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">{lang === "th" ? "ไทม์ไลน์การตัดสินใจ (อธิบายได้)" : "Explainable Decision Timeline"}</h3>
                       <Clock className="h-4 w-4 text-slate-400" />
                     </div>
 
