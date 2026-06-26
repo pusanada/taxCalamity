@@ -68,6 +68,48 @@ const dash = (v: any): string => {
   return String(v);
 };
 
+// Map internal pipeline node ids (e.g. "node_6_explanation") to the
+// human-readable agent name shown to clients, in the active language.
+const AGENT_NAMES: Record<string, { th: string; en: string }> = {
+  node_1_interpreter: { th: "ตัวแปลภาษาไทย (Typhoon)", en: "Thai Interpreter (Typhoon)" },
+  node_2_intake: { th: "เจ้าหน้าที่รับข้อมูล", en: "Intake Agent" },
+  node_3_suitability: { th: "นักวิเคราะห์ความเหมาะสม", en: "Suitability Analyst" },
+  node_4_tax_engine: { th: "เครื่องคำนวณภาษี", en: "Tax Engine" },
+  node_5_fund_recommender: { th: "ผู้แนะนำกองทุน", en: "Fund Recommender" },
+  node_6_explanation: { th: "ผู้สรุปคำอธิบาย", en: "Explanation Agent" },
+  node_7_human_review: { th: "การตรวจทานโดยมนุษย์", en: "Human Review" },
+  node_8_compliance: { th: "ผู้ตรวจสอบกำกับ (SEC)", en: "Compliance Auditor" },
+  node_9_report: { th: "ผู้จัดทำรายงาน", en: "Report Builder" },
+};
+const friendlyAgent = (code: string | null | undefined, lang: "th" | "en"): string => {
+  if (!code) return "";
+  const hit = AGENT_NAMES[code];
+  if (hit) return hit[lang];
+  // Fallback: strip the node_N_ prefix and prettify the remainder.
+  return code.replace(/^node_\d+_/, "").replace(/_/g, " ");
+};
+
+// Group recommended funds by tax-deduction type (SSF / RMF / ThaiESG / other).
+const FUND_TYPE_ORDER = ["SSF", "RMF", "ThaiESG"];
+const groupFundsByType = (funds: any[]): { type: string; funds: any[] }[] => {
+  const groups: Record<string, any[]> = {};
+  for (const f of funds || []) {
+    const t = (f.fund_type || "Other").toString();
+    (groups[t] ||= []).push(f);
+  }
+  const ordered = FUND_TYPE_ORDER.filter((t) => groups[t]);
+  const extras = Object.keys(groups).filter((t) => !FUND_TYPE_ORDER.includes(t));
+  return [...ordered, ...extras].map((type) => ({ type, funds: groups[type] }));
+};
+
+// Licensed-advisor (CFA) contact surfaced by the "Contact Advisor" buttons.
+// TODO(ship): replace `channel` with the real Line/phone/email before launch.
+const CFA_CONTACT = {
+  th: "ทีมที่ปรึกษาการเงินที่มีใบอนุญาต (CFA)",
+  en: "Licensed Financial Advisor Team (CFA)",
+  channel: "<TODO: ใส่ช่องทางติดต่อจริง (Line / โทร / อีเมล)>",
+};
+
 // Tracked profile fields the client did NOT provide (from extracted entities).
 function getMissingFields(result: any) {
   const ent = result?.typhoon_result?.entities || {};
@@ -235,6 +277,7 @@ function WhatIfCTA({
 export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }) {
   const router = useRouter();
   const { setSessionId, lang } = useSession();
+  const [contactOpen, setContactOpen] = useState(false);
   const [inputText, setInputText] = useState(PRESETS[0].text);
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState("");
@@ -484,9 +527,9 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
         {/* ===== INTAKE VIEW ===== */}
         {view === "intake" && (
-        <div className="max-w-2xl mx-auto">
-          {/* Input Panel */}
-          <div className="flex flex-col gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-6xl mx-auto">
+          {/* Left: transcription / presets / upload / run */}
+          <div className="lg:col-span-7 flex flex-col gap-6">
             <div className="glass-panel p-6 glow-indigo flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold tracking-wider text-indigo-400 uppercase font-outfit">Client Transcription (Thai)</h2>
@@ -624,15 +667,70 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
             </div>
           </div>
 
-          {/* Force-skip to results — always available, even if incomplete */}
-          {result && (
-            <button
-              onClick={() => router.push("/results")}
-              className="w-full py-3 bg-emerald-600/90 hover:bg-emerald-500 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
-            >
-              {tr(lang, "goToResults")} →
-            </button>
-          )}
+          {/* Right: post-analysis actions — missing-info form (optional) + skip-to-results.
+              Appears after Run; the form uses the same overrides re-analyze path. */}
+          <div className="lg:col-span-5 flex flex-col gap-6">
+            {!result && (
+              <div className="glass-panel p-6 border-dashed border-white/10 flex flex-col items-center justify-center text-center gap-3 min-h-[200px]">
+                <FileText className="h-7 w-7 text-indigo-400/70" />
+                <p className="text-xs text-slate-400 max-w-xs">
+                  {lang === "th" ? "กด “วิเคราะห์ข้อมูล” เพื่อเริ่ม ระบบจะแสดงข้อมูลที่ขาด (ถ้ามี) ที่นี่" : "Run the analysis to start. Any missing profile info will appear here."}
+                </p>
+              </div>
+            )}
+
+            {result && audit && audit.missingFields.length > 0 && (
+              <div className="glass-panel p-6 border border-amber-500/20 bg-amber-500/[0.03] flex flex-col gap-4">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-amber-300">{lang === "th" ? "ข้อมูลโปรไฟล์ที่ขาด (ไม่บังคับ)" : "Missing Profile Information (Optional)"}</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {lang === "th" ? "ข้อมูลต่อไปนี้ยังไม่ได้ระบุ การเพิ่มจะช่วยให้คำแนะนำแม่นยำขึ้น หรือข้ามไปดูผลลัพธ์ได้เลย" : "Not provided yet. Adding these improves accuracy — or skip ahead to the results."}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {audit.missingFields.map((f) => (
+                    <div key={f.key} className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{f.label}</label>
+                      <input
+                        type={f.type}
+                        value={optionalInputs[f.key] ?? ""}
+                        onChange={(e) => setOptionalInputs({ ...optionalInputs, [f.key]: e.target.value })}
+                        placeholder={f.placeholder}
+                        className="w-full px-3 py-2 bg-slate-950/70 border border-white/10 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-amber-500/50 transition-colors"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={applyOptionalInfo}
+                  disabled={loading}
+                  className="px-4 py-2.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                  {lang === "th" ? "บันทึกและวิเคราะห์ใหม่" : "Apply & re-analyze"}
+                </button>
+              </div>
+            )}
+
+            {result && audit && audit.missingFields.length === 0 && (
+              <div className="glass-panel p-6 border border-emerald-500/20 bg-emerald-500/[0.03] flex items-start gap-2.5">
+                <CheckCircle className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-300">{lang === "th" ? "ข้อมูลครบถ้วน พร้อมดูผลการวิเคราะห์" : "Profile complete — ready to view the full results."}</p>
+              </div>
+            )}
+
+            {result && (
+              <button
+                onClick={() => router.push("/results")}
+                className="w-full py-3 bg-emerald-600/90 hover:bg-emerald-500 text-white font-medium text-sm rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
+              >
+                {tr(lang, "goToResults")} →
+              </button>
+            )}
+          </div>
         </div>
         )}
 
@@ -701,19 +799,30 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                           onClick={handleEditRecommendation}
                           className="px-4 py-2.5 bg-slate-800/60 hover:bg-slate-700/60 border border-white/10 text-slate-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
                         >
-                          <Pencil className="h-3.5 w-3.5" /> Edit recommendation
+                          <Pencil className="h-3.5 w-3.5" /> {lang === "th" ? "แก้ไขคำแนะนำ" : "Edit recommendation"}
+                        </button>
+                        <button
+                          onClick={() => setContactOpen((v) => !v)}
+                          className="px-4 py-2.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" /> {lang === "th" ? "ติดต่อที่ปรึกษา" : "Contact Advisor"}
                         </button>
                         <button
                           onClick={handleGenerateProposal}
                           className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-1.5"
                         >
-                          {proposalDone ? <CheckCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-                          {proposalDone ? "Proposal generated" : "Generate & send client proposal"}
+                          {proposalDone ? <CheckCircle className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                          {proposalDone ? (lang === "th" ? "ดาวน์โหลดแล้ว" : "Downloaded") : (lang === "th" ? "ดาวน์โหลดสรุป" : "Download summary")}
                         </button>
                       </div>
+                      {contactOpen && (
+                        <div className="p-3 bg-amber-500/[0.06] border border-amber-500/25 rounded-lg text-xs text-amber-200 sm:text-right break-all">
+                          {CFA_CONTACT[lang]} — {CFA_CONTACT.channel}
+                        </div>
+                      )}
                       {proposalDone && (
                         <p className="text-[11px] text-emerald-400/90 sm:text-right">
-                          Proposal downloaded — ready for the advisor to send to the client.
+                          {lang === "th" ? "ดาวน์โหลดสรุปแล้ว — พร้อมส่งให้ลูกค้า" : "Summary downloaded — ready to send to the client."}
                         </p>
                       )}
                     </div>
@@ -730,14 +839,25 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                           <ShieldAlert className="h-3.5 w-3.5" /> Rejected
                         </span>
                       </div>
-                      <div className="flex sm:justify-end">
+                      <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
                         <button
                           onClick={handleEditRecommendation}
                           className="px-4 py-2.5 bg-slate-800/60 hover:bg-slate-700/60 border border-white/10 text-slate-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
                         >
-                          <Pencil className="h-3.5 w-3.5" /> Edit recommendation
+                          <Pencil className="h-3.5 w-3.5" /> {lang === "th" ? "แก้ไขคำแนะนำ" : "Edit recommendation"}
+                        </button>
+                        <button
+                          onClick={() => setContactOpen((v) => !v)}
+                          className="px-4 py-2.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" /> {lang === "th" ? "ติดต่อที่ปรึกษา" : "Contact Advisor"}
                         </button>
                       </div>
+                      {contactOpen && (
+                        <div className="p-3 bg-amber-500/[0.06] border border-amber-500/25 rounded-lg text-xs text-amber-200 sm:text-right break-all">
+                          {CFA_CONTACT[lang]} — {CFA_CONTACT.channel}
+                        </div>
+                      )}
                     </div>
                   )
                 )}
@@ -786,58 +906,8 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                   </div>
                 </div>
 
-                {/* 1a. Missing Profile Information (optional, non-blocking) */}
-                {audit && audit.missingFields.length > 0 && (
-                  <div className="glass-panel p-6 border border-amber-500/20 bg-amber-500/[0.03] flex flex-col gap-4">
-                    <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <h3 className="text-sm font-semibold text-amber-300">Missing Profile Information (Optional)</h3>
-                        <p className="text-xs text-slate-400 mt-1">
-                          The following information was not provided. Adding these details may improve recommendation quality and confidence scores.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {audit.missingFields.map((f) => (
-                        <span key={f.key} className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-md text-xs text-amber-300 flex items-center gap-1.5">
-                          <span className="text-amber-500/70">•</span>{f.label.replace(/ \(.*\)/, "")}
-                        </span>
-                      ))}
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                      {audit.missingFields.map((f) => (
-                        <div key={f.key} className="flex flex-col gap-1">
-                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{f.label}</label>
-                          <input
-                            type={f.type}
-                            value={optionalInputs[f.key] ?? ""}
-                            onChange={(e) => setOptionalInputs({ ...optionalInputs, [f.key]: e.target.value })}
-                            placeholder={f.placeholder}
-                            className="w-full px-3 py-2 bg-slate-950/70 border border-white/10 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-amber-500/50 transition-colors"
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-amber-500/10 pt-3">
-                      <p className="text-[11px] text-slate-400 flex items-start gap-1.5">
-                        <Info className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                        Providing additional profile information may improve recommendation accuracy and reduce uncertainty. All fields are optional.
-                      </p>
-                      <button
-                        onClick={applyOptionalInfo}
-                        disabled={loading}
-                        className="shrink-0 px-4 py-2 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg disabled:opacity-50 flex items-center justify-center gap-1.5"
-                      >
-                        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                        Apply &amp; re-analyze
-                      </button>
-                    </div>
-                  </div>
-                )}
+                {/* (Missing Profile Information form moved to the Intake page —
+                    shown there in the right column after Run.) */}
 
                 {/* 1b. Audit Summary — clickable Compliance + UQ cards */}
                 {audit && (
@@ -899,7 +969,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                               return (
                                 <div key={i} className={`p-2.5 rounded-md text-xs flex items-start gap-2 border ${crit ? "bg-red-500/5 border-red-500/15 text-red-300" : "bg-amber-500/5 border-amber-500/15 text-amber-300"}`}>
                                   <span className={`font-bold shrink-0 uppercase text-[10px] mt-0.5 ${crit ? "text-red-400" : "text-amber-400"}`}>{iss.severity}</span>
-                                  <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {iss.route_back_to}</span> : null}</span>
+                                  <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {friendlyAgent(iss.route_back_to, lang)}</span> : null}</span>
                                 </div>
                               );
                             })}
@@ -1212,59 +1282,51 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                   </div>
                 )}
 
-                {/* 5. Portfolio Fund Recommendations */}
+                {/* 5. Portfolio Fund Recommendations — grouped into a section per type */}
                 {result.recommendation && (
                   <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">Recommended Portfolio Allocation</h3>
-                      <span className="text-xs text-slate-400">Based on Risk profile & Goals</span>
+                      <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">{lang === "th" ? "พอร์ตกองทุนที่แนะนำ (แยกตามประเภท)" : "Recommended Portfolio (by Type)"}</h3>
+                      <span className="text-xs text-slate-400">{lang === "th" ? "อิงตามความเสี่ยงและเป้าหมาย" : "Based on Risk profile & Goals"}</span>
                     </div>
 
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-sm border-collapse">
-                        <thead>
-                          <tr className="border-b border-white/5 text-slate-500">
-                            <th className="py-2.5 font-semibold text-xs uppercase">Fund Code</th>
-                            <th className="py-2.5 font-semibold text-xs uppercase">Type</th>
-                            <th className="py-2.5 font-semibold text-xs uppercase text-center">Risk</th>
-                            <th className="py-2.5 font-semibold text-xs uppercase text-center">ESG</th>
-                            <th className="py-2.5 font-semibold text-xs uppercase text-right">Amount (THB)</th>
-                            <th className="py-2.5 font-semibold text-xs uppercase text-right">Weight</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {result.recommendation.recommended_funds?.map((fund: any, idx: number) => (
-                            <tr key={idx} className="border-b border-white/5 text-slate-300 hover:bg-slate-900/10">
-                              <td className="py-3 font-semibold">
-                                <div>{fund.fund_code}</div>
-                                <div className="text-[10px] text-slate-500 font-normal">{fund.fund_name}</div>
-                              </td>
-                              <td className="py-3 text-xs">{fund.fund_type}</td>
-                              <td className="py-3 text-center">
-                                <span className="inline-block px-1.5 py-0.5 rounded text-[11px] bg-indigo-500/10 text-indigo-400 font-medium font-mono">
-                                  {fund.risk_level}
-                                </span>
-                              </td>
-                              <td className="py-3 text-center">
-                                {fund.esg_rating && fund.esg_rating !== "N/A" ? (
-                                  <span className="inline-block px-1.5 py-0.5 rounded text-[11px] bg-emerald-500/10 text-emerald-400 font-bold font-mono">
-                                    {fund.esg_rating}
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-600">-</span>
-                                )}
-                              </td>
-                              <td className="py-3 text-right font-mono font-semibold">{formatTHB(fund.amount_thb)}</td>
-                              <td className="py-3 text-right font-mono font-semibold">{fund.allocation_percentage}%</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {groupFundsByType(result.recommendation.recommended_funds || []).map((grp) => {
+                        const total = grp.funds.reduce((s: number, f: any) => s + (f.amount_thb || 0), 0);
+                        return (
+                          <div key={grp.type} className="p-4 bg-slate-950/40 border border-white/5 rounded-lg flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                              <span className="text-sm font-bold text-indigo-300">{grp.type}</span>
+                              <span className="text-xs font-mono text-slate-400">{formatTHB(total)}</span>
+                            </div>
+                            <div className="flex flex-col gap-2.5">
+                              {grp.funds.map((fund: any, idx: number) => (
+                                <div key={idx} className="flex flex-col gap-1 border-b border-white/5 last:border-0 pb-2.5 last:pb-0">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-semibold text-slate-200">{fund.fund_code}</span>
+                                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-indigo-500/10 text-indigo-400 font-mono shrink-0">
+                                      {lang === "th" ? "เสี่ยง" : "risk"} {fund.risk_level}
+                                    </span>
+                                  </div>
+                                  {fund.fund_name && <span className="text-[10px] text-slate-500 leading-snug">{fund.fund_name}</span>}
+                                  <div className="flex items-center justify-between text-[11px] mt-0.5">
+                                    <span className="font-mono text-slate-300 font-semibold">{formatTHB(fund.amount_thb)}</span>
+                                    <span className="font-mono text-slate-400">{fund.allocation_percentage}%</span>
+                                  </div>
+                                  {fund.esg_rating && fund.esg_rating !== "N/A" && (
+                                    <span className="inline-block w-fit px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-bold font-mono">ESG {fund.esg_rating}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     {result.explanation?.overall_explanation && (
-                      <div className="mt-4 p-4 bg-slate-950/30 border border-white/5 rounded-lg">
-                        <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">Advisor Construction Strategy:</p>
+                      <div className="mt-2 p-4 bg-slate-950/30 border border-white/5 rounded-lg">
+                        <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">{lang === "th" ? "กลยุทธ์การจัดพอร์ตโดยที่ปรึกษา" : "Advisor Construction Strategy"}:</p>
                         <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">{result.explanation.overall_explanation}</p>
                       </div>
                     )}
@@ -1317,7 +1379,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                             return (
                               <div key={idx} className={`p-2.5 rounded-md text-xs flex items-start gap-2 border ${crit ? "bg-red-500/5 border-red-500/15 text-red-300" : "bg-amber-500/5 border-amber-500/15 text-amber-300"}`}>
                                 <span className={`font-bold shrink-0 uppercase text-[10px] mt-0.5 ${crit ? "text-red-400" : "text-amber-400"}`}>{iss.severity}</span>
-                                <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {iss.route_back_to}</span> : null}</span>
+                                <span>{iss.description}{iss.route_back_to ? <span className="text-slate-500"> · → {friendlyAgent(iss.route_back_to, lang)}</span> : null}</span>
                               </div>
                             );
                           })}
@@ -1403,7 +1465,7 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
 
         {/* ===== CHAT VIEW ===== */}
         {view === "chat" && (
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-6xl mx-auto">
           {!result?.session_id ? (
             <div className="glass-panel p-16 flex flex-col items-center justify-center text-center gap-4 border-dashed border-white/10 min-h-[400px]">
               <MessageCircle className="h-8 w-8 text-indigo-400" />
@@ -1413,9 +1475,10 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
               </div>
             </div>
           ) : (
-            <div className="glass-panel p-6 border-white/5 flex flex-col gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-7 glass-panel p-6 border-white/5 flex flex-col gap-4">
               <div className="flex items-center justify-between border-b border-white/5 pb-3">
-                <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">Ask the AI Advisor</h3>
+                <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase font-outfit">{lang === "th" ? "ถามที่ปรึกษา AI" : "Ask the AI Advisor"}</h3>
                 <MessageCircle className="h-4 w-4 text-slate-400" />
               </div>
 
@@ -1484,6 +1547,51 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
                   <Send className="h-4 w-4" />
                 </button>
               </div>
+            </div>
+
+            {/* Right: live summary so the client doesn't need to go back to Results */}
+            <div className="lg:col-span-5 flex flex-col gap-4">
+              <div className="glass-panel p-4 border-white/5 flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "การกำกับ (SEC)" : "Compliance"}</span>
+                <span className={`text-sm font-bold ${result.compliance ? (result.compliance.approved ? "text-emerald-400" : "text-red-400") : "text-amber-400"}`}>
+                  {result.compliance ? (result.compliance.approved ? (lang === "th" ? "ผ่าน" : "Approved") : (lang === "th" ? "ไม่ผ่าน" : "Rejected")) : (lang === "th" ? "รอตรวจ" : "Pending")}
+                </span>
+              </div>
+
+              {result.tax_result && (
+                <div className="glass-panel p-4 border-white/5 flex flex-col gap-2">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "สรุปภาษี" : "Tax Summary"}</span>
+                  <div className="flex justify-between text-xs"><span className="text-slate-400">{lang === "th" ? "ก่อนปรับ" : "Before"}</span><span className="font-mono text-slate-300">{formatTHB(result.tax_result.tax_before)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-slate-400">{lang === "th" ? "หลังปรับ" : "After"}</span><span className="font-mono text-slate-300">{formatTHB(result.tax_result.tax_after)}</span></div>
+                  <div className="flex justify-between text-sm border-t border-white/5 pt-2"><span className="text-emerald-400 font-semibold">{lang === "th" ? "ประหยัด" : "Saved"}</span><span className="font-mono font-bold text-emerald-400">{formatTHB(result.tax_result.saving)}</span></div>
+                </div>
+              )}
+
+              {result.recommendation?.recommended_funds?.length > 0 && (
+                <div className="glass-panel p-4 border-white/5 flex flex-col gap-2">
+                  <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">{lang === "th" ? "กองทุนที่แนะนำ" : "Recommended Funds"}</span>
+                  {result.recommendation.recommended_funds.map((f: any, i: number) => (
+                    <div key={i} className="flex justify-between items-center text-xs border-b border-white/5 last:border-0 pb-1.5 last:pb-0">
+                      <span className="text-slate-300"><span className="font-semibold">{f.fund_code}</span> <span className="text-slate-500">· {f.fund_type}</span></span>
+                      <span className="font-mono text-slate-400">{formatTHB(f.amount_thb)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="glass-panel p-4 border-white/5 grid grid-cols-2 gap-3">
+                <div className="flex flex-col"><span className="text-[10px] uppercase font-bold text-slate-500">{lang === "th" ? "อายุ" : "Age"}</span><span className="text-sm text-slate-200">{dash(result.typhoon_result?.entities?.age)}</span></div>
+                <div className="flex flex-col"><span className="text-[10px] uppercase font-bold text-slate-500">{lang === "th" ? "ความเสี่ยง" : "Risk"}</span><span className="text-sm text-indigo-400">{dash(result.typhoon_result?.entities?.risk_profile)}</span></div>
+                <div className="flex flex-col col-span-2"><span className="text-[10px] uppercase font-bold text-slate-500">{lang === "th" ? "เป้าหมาย" : "Goal"}</span><span className="text-sm text-emerald-400">{dash(result.typhoon_result?.entities?.goal)}</span></div>
+              </div>
+
+              <button
+                onClick={() => router.push("/results")}
+                className="text-center text-xs text-indigo-300 hover:text-indigo-200 py-2"
+              >
+                {lang === "th" ? "ดูผลแบบเต็ม →" : "View full results →"}
+              </button>
+            </div>
             </div>
           )}
         </div>

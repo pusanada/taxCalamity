@@ -4,7 +4,7 @@ import { SessionProvider } from './lib/session-context'
 import { Nav } from './components/Nav'
 
 export const metadata: Metadata = {
-  title: 'Chief Wealth Intelligence Platform',
+  title: 'TaxCalamity',
   description: 'Production Multi-Agent Wealth Optimization & Compliance Engine',
 }
 

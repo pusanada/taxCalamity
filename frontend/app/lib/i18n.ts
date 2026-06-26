@@ -14,7 +14,7 @@ export const LANGS: { code: Lang; label: string }[] = [
 
 const DICT: Record<Lang, Record<string, string>> = {
   th: {
-    appTitle: "Chief Wealth Intelligence Officer",
+    appTitle: "TaxCalamity",
     appSubtitle: "สถาปัตยกรรม 9 Agent (LangGraph & Typhoon NLP)",
     activeConnection: "เชื่อมต่อแล้ว",
     navIntake: "กรอกข้อมูล",
@@ -30,7 +30,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     noSessionBody: "วิเคราะห์ข้อมูลลูกค้าที่หน้า “กรอกข้อมูล” ก่อน แล้วจึงกลับมาที่หน้านี้",
   },
   en: {
-    appTitle: "Chief Wealth Intelligence Officer",
+    appTitle: "TaxCalamity",
     appSubtitle: "9-Agent Production Architecture (LangGraph & Typhoon NLP)",
     activeConnection: "Active Connection",
     navIntake: "Intake",
