@@ -146,178 +146,144 @@ def decode_base64_safe(s: str) -> str:
     except Exception:
         return s_orig
 
+# ---- SEC v2 classification / enrichment helpers -------------------------------
+
+def _classify_tax_type(tax_incentive, abbr, name):
+    """Hybrid classifier. RMF is NOT flagged by fund_class_tax_incentive_type, so
+    it is detected by the 'RMF' naming convention; SSF and ThaiESG come from the
+    authoritative tax-incentive field (their names rarely contain SSF/ESG, and a
+    plain 'ESG' in a name is not necessarily the tax-deductible Thai ESG fund)."""
+    tf = (tax_incentive or "").upper()
+    label = ((abbr or "") + " " + (name or "")).upper()
+    if "RMF" in label or "RETIREMENT MUTUAL" in tf:
+        return "RMF"
+    if "SUPER SAVINGS" in tf or "SAVINGS FUND" in tf or " SSF" in (" " + tf):
+        return "SSF"
+    if "THAILAND ESG" in tf or "THAI ESG" in tf:
+        return "ThaiESG"
+    return None
+
+
+def _asset_class_from_policy(policy_desc):
+    p = policy_desc or ""
+    if "ตราสารทุน" in p:
+        return "Equity"
+    if "ตราสารหนี้" in p:
+        return "Fixed Income"
+    if "ผสม" in p:
+        return "Mixed"
+    return "Alternative"
+
+
+async def _latest_risk_level(client, proj_id):
+    items = await client.get_risk_spectrum(proj_id)
+    if not items:
+        return 5
+    latest = sorted(items, key=lambda x: (x.get("end_date") or ""))[-1]
+    m = re.search(r"\d+", latest.get("risk_spectrum") or "")
+    return int(m.group()) if m else 5
+
+
+async def _representative_fee(client, proj_id):
+    """Pick a meaningful expense figure: prefer total expense / management fee."""
+    items = await client.get_fees(proj_id)
+    for kw in ["รวมค่าใช้จ่าย", "รวมทั้งหมด", "total expense", "การจัดการ", "management"]:
+        for it in items:
+            if kw.lower() in (it.get("fee_type_desc") or "").lower():
+                v = it.get("actual_value") or it.get("rate")
+                if v:
+                    try:
+                        return round(float(v), 4)
+                    except (TypeError, ValueError):
+                        pass
+    return None
+
+
 async def sync_funds_from_sec(db: Session) -> Dict[str, Any]:
-    """
-    Queries the SEC API, filters for popular active SSF, RMF, and ThaiESG funds,
-    fetches factsheet details, and caches them in the local database.
-    """
-    logger.info("Starting SEC fund catalog synchronization...")
+    """Pull SSF / RMF / ThaiESG mutual funds from the SEC Thailand Open API **v2**
+    and cache them in the local Fund table. Pages /v2/fund/general-info/profiles,
+    classifies by tax type, derives asset class from policy_desc, and enriches each
+    fund with risk level (/factsheet/risk-spectrum) and expense ratio
+    (/factsheet/fees). No mock fallback — failures bubble up to a 503."""
+    logger.info("Starting SEC v2 fund catalog synchronization...")
     client = SECClient()
-    
-    # 1. Fetch AMCs
+
+    # Caps keep the first (lazy) load bounded on free-tier hosting.
+    MAX_PROFILE_PAGES = 25
+    PER_TYPE_CAP = 6
+
+    selected = {"SSF": [], "RMF": [], "ThaiESG": []}
+    seen_proj = set()
+    cursor = ""
     try:
-        amcs = await client.get_amcs()
+        for _ in range(MAX_PROFILE_PAGES):
+            items, cursor = await client.fetch_profiles_page(cursor)
+            for it in items:
+                tax_type = _classify_tax_type(
+                    it.get("fund_class_tax_incentive_type"),
+                    it.get("proj_abbr_name"),
+                    it.get("proj_name_en") or it.get("proj_name_th"),
+                )
+                proj_id = it.get("proj_id")
+                if not tax_type or not proj_id or proj_id in seen_proj:
+                    continue
+                if len(selected[tax_type]) >= PER_TYPE_CAP:
+                    continue
+                seen_proj.add(proj_id)
+                objective = decode_base64_safe(it.get("investment_policy_desc") or "")
+                objective = (objective or it.get("policy_desc") or "").strip()
+                selected[tax_type].append({
+                    "proj_id": proj_id,
+                    "name": (it.get("proj_name_en") or it.get("proj_name_th") or it.get("proj_abbr_name") or proj_id).strip(),
+                    "abbr": (it.get("proj_abbr_name") or "").strip(),
+                    "tax_type": tax_type,
+                    "asset_class": _asset_class_from_policy(it.get("policy_desc")),
+                    "objective": objective[:497],
+                })
+            if not cursor or all(len(v) >= PER_TYPE_CAP for v in selected.values()):
+                break
     except Exception as e:
-        logger.error(f"Failed to fetch AMCs from SEC API: {str(e)}")
-        return {"status": "failed", "error": f"Failed to fetch AMCs: {str(e)}"}
-        
-    # We focus on major Thai AMCs to optimize request limits and performance
-    major_amc_keywords = ["KASIKORN", "SCB", "BUALUANG", "BBL", "THANACHART", "LH", "KRUNGSRI", "TMB", "UOB", "ONE", "ASSET PLUS"]
-    selected_amcs = []
-    for amc in amcs:
-        name_en = (amc.get("name_en") or "").upper()
-        name_th = (amc.get("name_th") or "").upper()
-        if any(kw in name_en or kw in name_th for kw in major_amc_keywords):
-            selected_amcs.append(amc)
-            
-    if not selected_amcs:
-        # Fallback to first few if none match keywords
-        selected_amcs = amcs[:5]
-        
-    logger.info(f"Selected {len(selected_amcs)} major AMCs for synchronization.")
-    
+        logger.error(f"Failed to page SEC fund profiles: {str(e)}")
+        return {"status": "failed", "error": f"Failed to fetch fund profiles: {str(e)}"}
+
+    candidates = [f for funds in selected.values() for f in funds]
+    if not candidates:
+        return {"status": "failed", "error": "No SSF/RMF/ThaiESG funds returned by the SEC API."}
+
     synced_count = 0
     errors_count = 0
-    
-    # Limit total funds processed to stay within a reasonable duration (e.g. max 50 funds)
-    max_funds_limit = 50
-    
-    for amc in selected_amcs:
-        if synced_count >= max_funds_limit:
-            break
-            
-        amc_id = amc.get("unique_id")
-        amc_name = amc.get("name_en") or amc.get("name_th")
-        logger.info(f"Fetching funds for AMC: {amc_name} (ID: {amc_id})")
-        
+    for f in candidates:
         try:
-            funds = await client.get_funds_by_amc(amc_id)
-        except Exception as e:
-            logger.warning(f"Failed to fetch funds for AMC {amc_name}: {str(e)}")
-            errors_count += 1
-            continue
-            
-        # Filter for tax-saving funds (SSF, RMF, ESG)
-        tax_funds = []
-        for f in funds:
-            abbr = (f.get("proj_abbr_name") or "").upper()
-            name_en = (f.get("proj_name_en") or "").upper()
-            if any(kw in abbr or kw in name_en for kw in ["SSF", "RMF", "ESG", "THAIESG"]):
-                tax_funds.append(f)
-                
-        logger.info(f"Found {len(tax_funds)} potential tax-saving funds under {amc_name}.")
-        
-        for f in tax_funds:
-            if synced_count >= max_funds_limit:
-                break
-                
-            proj_id = f.get("proj_id")
-            abbr = (f.get("proj_abbr_name") or "").strip()
-            proj_name = (f.get("proj_name_en") or f.get("proj_name_th") or "").strip()
-            name = f"{abbr} ({proj_name})" if abbr else proj_name
-            
-            # Determine tax type
-            abbr_upper = abbr.upper()
-            name_upper = name.upper()
-            if "SSF" in abbr_upper or "SSF" in name_upper:
-                tax_type = "SSF"
-            elif "RMF" in abbr_upper or "RMF" in name_upper:
-                tax_type = "RMF"
-            elif "ESG" in abbr_upper or "ESG" in name_upper or "THAIESG" in abbr_upper or "THAIESG" in name_upper:
-                tax_type = "ThaiESG"
+            risk_level = await _latest_risk_level(client, f["proj_id"])
+            expense_ratio = await _representative_fee(client, f["proj_id"])
+            objective = f["objective"] or f"{f['tax_type']} fund. Asset class: {f['asset_class']}."
+
+            fields = dict(
+                name=f["name"],
+                asset_class=f["asset_class"],
+                risk_level=risk_level,
+                tax_type=f["tax_type"],
+                expense_ratio=expense_ratio if expense_ratio is not None else 1.0,
+                objective=objective,
+            )
+            existing = db.query(Fund).filter(Fund.proj_id == f["proj_id"]).first()
+            if existing:
+                for k, v in fields.items():
+                    setattr(existing, k, v)
             else:
-                continue # Skip general funds
-                
-            logger.info(f"Syncing fund: {abbr} (ID: {proj_id}, Type: {tax_type})")
-            
-            try:
-                # Fetch detailed suitability, fee, and policy info
-                suitability = await client.get_fund_suitability(proj_id)
-                fees = await client.get_fund_fee(proj_id)
-                policy = await client.get_fund_policy(proj_id)
-                
-                # 1. Parse Risk Level
-                risk_spectrum = suitability.get("risk_spectrum", "")
-                match = re.search(r'\d+', risk_spectrum)
-                risk_level = int(match.group()) if match else 5
-                
-                # 2. Parse Expense Ratio
-                expense_ratio = 1.0  # default fallback
-                if isinstance(fees, list):
-                    # Try to find total expense ratio
-                    total_fee_item = None
-                    for fee in fees:
-                        desc = fee.get("fee_type_desc") or ""
-                        if "รวมทั้งหมด" in desc or "รวมค่าใช้จ่าย" in desc or "Total Expense" in desc or "Total Fee" in desc:
-                            total_fee_item = fee
-                            break
-                    if not total_fee_item:
-                        # Fallback to management fee
-                        for fee in fees:
-                            desc = fee.get("fee_type_desc") or ""
-                            if "การจัดการ" in desc or "Management" in desc:
-                                total_fee_item = fee
-                                break
-                    if total_fee_item:
-                        val = total_fee_item.get("actual_value")
-                        if val is None or float(val) == 0.0:
-                            val = total_fee_item.get("rate")
-                        if val is not None:
-                            expense_ratio = float(val)
-                            
-                # 3. Parse Asset Class
-                policy_desc = policy.get("policy_desc") or ""
-                policy_text_decoded = decode_base64_safe(policy.get("investment_policy_desc") or "").upper()
-                
-                combined_policy = (policy_desc + " " + policy_text_decoded + " " + name).upper()
-                if any(kw in combined_policy for kw in ["EQUITY", "STOCK", "หุ้น", "ตราสารทุน"]):
-                    asset_class = "Equity"
-                elif any(kw in combined_policy for kw in ["BOND", "FIXED", "TREASURY", "DEBENTURE", "ตราสารหนี้", "เงินฝาก"]):
-                    asset_class = "Fixed Income"
-                elif any(kw in combined_policy for kw in ["MIXED", "BALANCED", "ผสม", "ตราสารผสม"]):
-                    asset_class = "Mixed"
-                else:
-                    asset_class = "Equity" # Default fallback
-                    
-                # 4. Parse Objective
-                objective = decode_base64_safe(policy.get("investment_policy_desc") or "")
-                if not objective:
-                    objective = f"Investment objective for {name} ({abbr}). Class: {asset_class}."
-                if len(objective) > 500:
-                    objective = objective[:497] + "..."
-                    
-                # Save or update in database
-                existing_fund = db.query(Fund).filter(Fund.proj_id == proj_id).first()
-                if existing_fund:
-                    existing_fund.name = name
-                    existing_fund.asset_class = asset_class
-                    existing_fund.risk_level = risk_level
-                    existing_fund.tax_type = tax_type
-                    existing_fund.expense_ratio = expense_ratio
-                    existing_fund.objective = objective
-                else:
-                    new_fund = Fund(
-                        proj_id=proj_id,
-                        name=name,
-                        asset_class=asset_class,
-                        risk_level=risk_level,
-                        tax_type=tax_type,
-                        expense_ratio=expense_ratio,
-                        aum=1200000000.0, # Default value
-                        objective=objective
-                    )
-                    db.add(new_fund)
-                    
-                synced_count += 1
-                logger.info(f"Successfully synced {abbr}: Risk={risk_level}, Fee={expense_ratio}%, Class={asset_class}")
-                
-            except Exception as ex:
-                logger.warning(f"Error processing fund {abbr} ({proj_id}): {str(ex)}")
-                errors_count += 1
-                
+                db.add(Fund(proj_id=f["proj_id"], aum=0.0, **fields))
+            synced_count += 1
+        except Exception as ex:
+            logger.warning(f"Error enriching fund {f.get('abbr')} ({f.get('proj_id')}): {str(ex)}")
+            errors_count += 1
+
     db.commit()
-    logger.info(f"Catalog sync completed. Synced funds: {synced_count}, Errors: {errors_count}")
-    return {"status": "success", "synced_count": synced_count, "errors_count": errors_count}
+    by_type = {k: len(v) for k, v in selected.items()}
+    logger.info(f"SEC v2 catalog sync done. Synced: {synced_count}, Errors: {errors_count}, by type: {by_type}")
+    if synced_count == 0:
+        return {"status": "failed", "error": "Fund enrichment failed for all candidates."}
+    return {"status": "success", "synced_count": synced_count, "errors_count": errors_count, "by_type": by_type}
+
 
 def seed_funds(db: Session):
     """
@@ -369,14 +335,19 @@ def recommend_funds(
     allowed_risks = risk_map.get(risk_profile, [3, 4, 5, 6])
     
     # Query database candidates
+    # Only ever recommend real SEC-sourced funds — exclude any stale MOCK_* rows.
     candidates = db.query(Fund).filter(
         Fund.tax_type == tax_type,
-        Fund.risk_level.in_(allowed_risks)
+        Fund.risk_level.in_(allowed_risks),
+        ~Fund.proj_id.like("MOCK_%"),
     ).all()
-    
+
     # Fallback if no matching risk is found: query all of that tax type
     if not candidates:
-        candidates = db.query(Fund).filter(Fund.tax_type == tax_type).all()
+        candidates = db.query(Fund).filter(
+            Fund.tax_type == tax_type,
+            ~Fund.proj_id.like("MOCK_%"),
+        ).all()
         
     if not candidates:
         return []
