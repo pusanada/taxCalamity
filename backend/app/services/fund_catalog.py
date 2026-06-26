@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
+import asyncio
 import base64
 import re
 import logging
@@ -8,6 +9,45 @@ from backend.app.services.sec_client import SECClient
 from backend.app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class FundCatalogUnavailable(RuntimeError):
+    """Raised when the live SEC fund catalog cannot be loaded after retries.
+    The API layer maps this to HTTP 503 'try again later'. No mock funds are
+    ever served in its place."""
+
+
+def _real_fund_count(db: Session) -> int:
+    """Funds that came from the live SEC sync (mock seeds use MOCK_* proj_ids
+    and must never count as a usable catalog)."""
+    return db.query(Fund).filter(~Fund.proj_id.like("MOCK_%")).count()
+
+
+async def ensure_funds_available(db: Session, retries: int = 2) -> int:
+    """Guarantee the catalog holds live SEC-sourced funds before a recommendation
+    runs. Pulls lazily on first need; retries on transient SEC failures, then
+    raises FundCatalogUnavailable. Never falls back to mock data."""
+    have = _real_fund_count(db)
+    if have > 0:
+        return have
+
+    last_err: Optional[str] = None
+    for attempt in range(retries + 1):
+        try:
+            result = await sync_funds_from_sec(db)
+            if result.get("status") == "success" and _real_fund_count(db) > 0:
+                return _real_fund_count(db)
+            last_err = result.get("error") or "SEC sync returned no funds"
+        except Exception as e:  # network blip, timeout, etc.
+            last_err = str(e)
+        logger.warning(f"SEC fund sync attempt {attempt + 1} failed: {last_err}")
+        if attempt < retries:
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+    raise FundCatalogUnavailable(
+        "ไม่สามารถโหลดข้อมูลกองทุนจาก SEC ได้ กรุณาลองใหม่อีกครั้ง / "
+        "Could not load fund data from the SEC. Please try again later."
+    )
 
 # Pre-populated active Thai mutual funds
 INITIAL_FUNDS = [
@@ -341,22 +381,36 @@ def recommend_funds(
     if not candidates:
         return []
         
-    # Sort candidates (for Growth prioritize higher risk, for Conservative prioritize lower risk)
-    if goal.lower() == "growth":
-        candidates = sorted(candidates, key=lambda x: x.risk_level, reverse=True)
+    # Sort candidates by best fit: goal sets the risk preference, then prefer the
+    # cheaper fund (lower expense ratio) to break ties.
+    if goal and goal.lower() == "growth":
+        candidates = sorted(candidates, key=lambda x: (-x.risk_level, x.expense_ratio))
     else:
-        candidates = sorted(candidates, key=lambda x: x.risk_level)
-        
-    # Pick the top candidate
-    selected_fund = candidates[0]
-    
-    return [{
-        "fund_code": selected_fund.name.split(" ")[0] if " " in selected_fund.name else selected_fund.name, # Use first word as ticker
-        "fund_name": selected_fund.name,
-        "fund_type": selected_fund.tax_type,
-        "amount_thb": budget,
-        "allocation_percentage": 100.0,
-        "risk_level": selected_fund.risk_level,
-        "expense_ratio": selected_fund.expense_ratio,
-        "reason": f"Recommended because it matches your risk profile ({risk_profile}) and provides {tax_type} tax shelter."
-    }]
+        candidates = sorted(candidates, key=lambda x: (x.risk_level, x.expense_ratio))
+
+    # Recommend the top 3 best-fit funds for this tax type (or fewer if the SEC
+    # catalog has fewer). The per-type budget is split so the best-fit fund gets
+    # the largest share. allocation_percentage here is within-type; the
+    # recommendation node renormalizes it portfolio-wide.
+    selected_funds = candidates[:3]
+    weights = [0.5, 0.3, 0.2][: len(selected_funds)]
+    weight_sum = sum(weights)
+    weights = [w / weight_sum for w in weights]
+
+    results: List[Dict[str, Any]] = []
+    for rank, (fund, weight) in enumerate(zip(selected_funds, weights), start=1):
+        results.append({
+            "fund_code": fund.name.split(" ")[0] if " " in fund.name else fund.name,  # first word as ticker
+            "fund_name": fund.name,
+            "fund_type": fund.tax_type,
+            "amount_thb": round(budget * weight, 2),
+            "allocation_percentage": round(weight * 100.0, 2),
+            "risk_level": fund.risk_level,
+            "expense_ratio": fund.expense_ratio,
+            "reason": (
+                f"Top {rank} {tax_type} pick for your {risk_profile or 'selected'} risk profile "
+                f"(fund risk {fund.risk_level}, expense ratio {fund.expense_ratio}%), "
+                f"providing {tax_type} tax-deductible benefit."
+            ),
+        })
+    return results

@@ -29,7 +29,12 @@ from backend.app.schemas.schemas import (
     ComplianceReportSchema
 )
 from backend.app.graph.workflow import app_workflow
-from backend.app.services.fund_catalog import seed_funds, sync_funds_from_sec
+from backend.app.services.fund_catalog import (
+    sync_funds_from_sec,
+    ensure_funds_available,
+    FundCatalogUnavailable,
+)
+from backend.app.agents.agents import LiveServiceUnavailable
 from backend.app.services.file_extract import extract_text_from_file
 from backend.app.services.chat_service import (
     synthesize_chat_reply_v2,
@@ -44,15 +49,10 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: initialize the database and seed the fund catalog.
+    # Startup: initialize the database only. The fund catalog is pulled lazily
+    # from the live SEC API on the first /analyze (see ensure_funds_available);
+    # no mock funds are ever seeded.
     init_db()
-    db = SessionLocal()
-    try:
-        seed_funds(db)
-    except Exception as e:
-        print(f"Startup seeder error: {str(e)}")
-    finally:
-        db.close()
     yield
 
 
@@ -144,7 +144,10 @@ async def chat(request: Dict[str, Any], db: Session = Depends(get_db)):
     # frozen pipeline client_data every time (the repeated "ข้อมูลยังไม่ครบ" bug).
     state_data = wf_state.state_data or {}
     chat_profile = state_data.get("chat_profile") or {}
-    new_entities = await run_in_threadpool(extract_entities_from_message, message)
+    try:
+        new_entities = await run_in_threadpool(extract_entities_from_message, message)
+    except LiveServiceUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     chat_profile = merge_chat_profile(chat_profile, new_entities, message)
     try:
         # Reassign (not in-place mutate) so SQLAlchemy flags the JSON column dirty.
@@ -160,6 +163,8 @@ async def chat(request: Dict[str, Any], db: Session = Depends(get_db)):
         reply = await run_in_threadpool(
             synthesize_chat_reply_v2, wf_state.state_data, chat_profile, message
         )
+    except LiveServiceUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat synthesis failed: {str(e)}")
 
@@ -211,10 +216,14 @@ async def analyze_profile(request: AdvisoryWorkflowRequest):
     }
     
     try:
+        # Lazily pull the live SEC fund catalog on first need (no mock seed).
+        # A SEC outage surfaces as a 503 'try again later', never fake funds.
+        await ensure_funds_available(db)
+
         # Run workflow: will execute intake -> suitability -> tax -> recommendation -> explanation
         # and pause right before compliance (at the human_review node).
         final_state = app_workflow.invoke(initial_state, config=config)
-        
+
         # Save trace logs
         return AdvisoryWorkflowResponse(
             session_id=session_id,
@@ -228,6 +237,9 @@ async def analyze_profile(request: AdvisoryWorkflowRequest):
             status=final_state.get("status"),
             trace=final_state.get("trace", [])
         )
+    except (LiveServiceUnavailable, FundCatalogUnavailable) as e:
+        # Live AI / SEC data unavailable after retries — tell the client to retry.
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis pipeline failed: {str(e)}")
 
@@ -290,6 +302,8 @@ async def approve_recommendation(request: Dict[str, Any]):
             status=final_state.get("status"),
             trace=final_state.get("trace", [])
         )
+    except (LiveServiceUnavailable, FundCatalogUnavailable) as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to resume workflow: {str(e)}")
 

@@ -153,10 +153,10 @@ def synthesize_chat_reply(session_state: dict, client_question: str) -> str:
 # ============================================================================
 
 _CFA_PARTNER_CONTACT = {
-    "name": "ทีมที่ปรึกษาการเงินที่มีใบอนุญาต (CFA)",
-    # TODO(ship): replace with the real partner channel (Line/phone/email).
-    # Left as an explicit placeholder, not invented contact info.
-    "contact_method": "<TODO: ใส่ช่องทางติดต่อ partner จริง (Line/เบอร์โทร/อีเมล)>",
+    "name": "ผู้เชี่ยวชาญด้านการเงิน",
+    # Demo channel for now (no real licensed-advisor partner yet). Swap when one
+    # exists — kept generic, never claiming a CFA/licensed credential we don't have.
+    "contact_method": "advisor@taxcalamity.app (เดโม)",
 }
 
 # Major life-planning topics. Two or more together (in one message OR
@@ -201,14 +201,14 @@ CHAT_SYSTEM_PROMPT_V2 = """\
 3. ถามต่อแค่ "ข้อมูลเดียวที่สำคัญที่สุด" ที่ขาดในตอนนี้ ไม่ใช่ไล่ถามทุกอย่างซ้ำใน
    ทุกข้อความ — เลือกจาก missing_fields ตัวที่ส่งผลต่อคำแนะนำมากที่สุดก่อน
 
-4. Escalation rule — ส่งต่อให้ที่ปรึกษาจริง (CFA partner) เมื่อเข้าเงื่อนไขใดข้อหนึ่ง:
+4. Escalation rule — ส่งต่อให้ผู้เชี่ยวชาญด้านการเงิน เมื่อเข้าเงื่อนไขใดข้อหนึ่ง:
    - คำขอครอบคลุมหลายเรื่องใหญ่พร้อมกันที่ต้องวางแผนเป็นองค์รวม (เช่น มีลูก + ซื้อบ้าน
      + ซื้อประกันชีวิต พร้อมกัน) ซึ่งเกินกว่าที่ระบบนี้ (ออกแบบมาเพื่อภาษี/กองทุนลดหย่อน
      โดยเฉพาะ) จะวิเคราะห์ให้ครบทุกมิติได้
    - ลูกค้าขอคำแนะนำเชิงลึกที่เป็นการวางแผนการเงินส่วนบุคคลแบบครบวงจร ไม่ใช่แค่
      ลดหย่อนภาษี/เลือกกองทุน
    เมื่อ escalate ให้ตอบส่วนที่ระบบช่วยได้ก่อน (ตามกฎ #2) แล้วต่อท้ายด้วยการแนะนำ
-   ติดต่อที่ปรึกษา CFA สำหรับส่วนที่ลึกกว่านั้น — ห้ามแนะนำ "ไปหาที่ปรึกษา" แบบลอยๆ
+   ติดต่อผู้เชี่ยวชาญด้านการเงิน สำหรับส่วนที่ลึกกว่านั้น — ห้ามแนะนำ "ไปหาที่ปรึกษา" แบบลอยๆ
    ไม่มีช่องทาง ให้ใช้ suggested_action ที่ระบบส่งมาให้ (ดู escalate_to_advisor)
 
 5. ถ้า compliance_status != "approved" ห้ามให้ตัวเลข/คำแนะนำกองทุนเป็นคำแนะนำสุดท้าย

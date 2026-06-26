@@ -102,12 +102,12 @@ const groupFundsByType = (funds: any[]): { type: string; funds: any[] }[] => {
   return [...ordered, ...extras].map((type) => ({ type, funds: groups[type] }));
 };
 
-// Licensed-advisor (CFA) contact surfaced by the "Contact Advisor" buttons.
-// TODO(ship): replace `channel` with the real Line/phone/email before launch.
+// Advisor contact surfaced by the "Contact Advisor" buttons. Demo channel for
+// now (no real licensed-advisor partner yet) — swap `channel` when one exists.
 const CFA_CONTACT = {
-  th: "ทีมที่ปรึกษาการเงินที่มีใบอนุญาต (CFA)",
-  en: "Licensed Financial Advisor Team (CFA)",
-  channel: "<TODO: ใส่ช่องทางติดต่อจริง (Line / โทร / อีเมล)>",
+  th: "ปรึกษาผู้เชี่ยวชาญด้านการเงิน",
+  en: "Contact an advisor",
+  channel: "advisor@taxcalamity.app (demo)",
 };
 
 // Tracked profile fields the client did NOT provide (from extracted entities).
@@ -388,7 +388,10 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`);
+        // 503 = live AI / SEC data unavailable after retries (no mock served).
+        if (response.status === 503) throw new Error(tr(lang, "serviceBusyRetry"));
+        const j = await response.json().catch(() => ({}));
+        throw new Error(j.detail || `Server returned status ${response.status}`);
       }
 
       const data = await response.json();
@@ -405,6 +408,8 @@ export function DashboardShell({ view }: { view: "intake" | "results" | "chat" }
         });
         if (rec.ok) {
           finalData = await rec.json();
+        } else if (rec.status === 503) {
+          throw new Error(tr(lang, "serviceBusyRetry"));
         }
       }
       setResult(finalData);

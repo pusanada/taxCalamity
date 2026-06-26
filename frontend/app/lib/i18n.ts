@@ -28,6 +28,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     incompleteBody: "กลับไปกรอกข้อมูลเพิ่มที่หน้า “กรอกข้อมูล” หรือดูสิ่งที่ระบบสกัดได้แล้วด้านล่าง คุณยังเริ่มแชทถามเพิ่มได้",
     noSessionTitle: "ยังไม่มี session",
     noSessionBody: "วิเคราะห์ข้อมูลลูกค้าที่หน้า “กรอกข้อมูล” ก่อน แล้วจึงกลับมาที่หน้านี้",
+    serviceBusyRetry: "บริการไม่พร้อมใช้งานชั่วคราว (ระบบ AI หรือข้อมูลกองทุนจาก SEC หนาแน่น) กรุณาลองใหม่อีกครั้งในอีกสักครู่",
   },
   en: {
     appTitle: "TaxCalamity",
@@ -44,6 +45,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     incompleteBody: "Go back to Intake to add details, or review what the system already extracted below. You can still start a chat.",
     noSessionTitle: "No active session",
     noSessionBody: "Analyze a client profile on the Intake page first, then return here.",
+    serviceBusyRetry: "Service is temporarily busy (AI or SEC fund data unavailable). Please try again in a moment.",
   },
 };
 

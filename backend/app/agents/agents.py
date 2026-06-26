@@ -26,11 +26,19 @@ from backend.app.schemas.schemas import (
 # unreliable with Groq's Qwen models (tool_use_failed) and does not forward
 # per-LLM credentials to custom OpenAI-compatible endpoints like Typhoon.
 # Instead we call both providers directly via their OpenAI-compatible APIs and
-# validate the JSON into our existing Pydantic schemas. The hardcoded mock
-# responses remain only as a last-resort fallback if every live call fails.
+# validate the JSON into our existing Pydantic schemas. Mock fallback is fully
+# disabled: if every live provider fails (after retries) we raise
+# LiveServiceUnavailable so the API can tell the user to try again later, rather
+# than ever serving fabricated data.
 # ----------------------------------------------------------------------------
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+
+class LiveServiceUnavailable(RuntimeError):
+    """Raised when all live LLM providers fail after retries. The API layer maps
+    this to HTTP 503 with a 'please try again later' message for the client.
+    Mock data is never served in its place."""
 
 
 def is_valid_key(key: Optional[str]) -> bool:
@@ -84,13 +92,13 @@ def _chat_json(
     user: str,
     use_json_mode: bool = True,
     temperature: float = 0.2,
-    retries: int = 1,
+    retries: int = 2,
 ) -> dict:
     """Call an OpenAI-compatible chat endpoint and return parsed JSON.
 
-    Retries once on transient errors (network blips, rate limits, malformed
-    JSON) so a single hiccup doesn't fail the whole request now that mock
-    fallback is off in production.
+    Retries on transient errors (network blips, rate limits, malformed JSON)
+    before giving up, since mock fallback is disabled — a single hiccup must not
+    surface to the user as a hard failure if a retry can recover it.
     """
     kwargs: dict = {
         "model": model,
@@ -119,16 +127,17 @@ def _groq_json(system: str, user: str, **kw) -> dict:
 
 
 def _maybe_mock(factory):
-    """Return a deterministic mock only if explicitly enabled; otherwise raise.
+    """Mock fallback is permanently disabled — always raise.
 
-    Keeps mock code available for local testing (USE_MOCK_FALLBACK=true) while
-    guaranteeing production never silently serves fabricated data.
+    Previously this could return deterministic mock data when
+    USE_MOCK_FALLBACK was set. Per product decision the system must never serve
+    fabricated advisory data: when every live provider fails we surface an
+    honest 'try again later' error instead. The `factory` (a _mock_* builder) is
+    intentionally never invoked.
     """
-    if settings.USE_MOCK_FALLBACK:
-        return factory()
-    raise RuntimeError(
-        "Live LLM call failed and mock fallback is disabled. "
-        "Set USE_MOCK_FALLBACK=true for local testing."
+    raise LiveServiceUnavailable(
+        "บริการ AI ไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่อีกครั้ง / "
+        "AI service is temporarily unavailable. Please try again later."
     )
 
 
